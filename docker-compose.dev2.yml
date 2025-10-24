@@ -1,0 +1,40 @@
+# Docker Compose for Developer 2
+# Runs on different ports to avoid conflicts with Project Manager containers
+# Project Manager uses: postgres:5432, redis:6379
+# Developer 2 uses: postgres:5433, redis:6380
+
+services:
+  postgres-dev2:
+    image: postgres:14-alpine
+    container_name: seka-postgres-dev2
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: seka_svara_db_dev2
+    ports:
+      - '5433:5432'  # External:5433 -> Internal:5432
+    volumes:
+      - postgres_data_dev2:/var/lib/postgresql/data
+    networks:
+      - seka-network-dev2
+
+  redis-dev2:
+    image: redis:7-alpine
+    container_name: seka-redis-dev2
+    restart: always
+    ports:
+      - '6380:6379'  # External:6380 -> Internal:6379
+    volumes:
+      - redis_data_dev2:/data
+    networks:
+      - seka-network-dev2
+
+volumes:
+  postgres_data_dev2:
+  redis_data_dev2:
+
+networks:
+  seka-network-dev2:
+    driver: bridge
+

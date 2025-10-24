@@ -1,0 +1,62 @@
+services:
+  postgres:
+    image: postgres:14-alpine
+    container_name: seka-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: seka_svara_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - seka-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: seka-redis
+    restart: always
+    ports:
+      - "16379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - seka-network
+
+  backend:
+    image: seka-backend:latest
+    container_name: seka-backend
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      - NODE_ENV=development
+      - PORT=8000
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USERNAME=postgres
+      - DB_PASSWORD=postgres
+      - DB_DATABASE=seka_svara_db
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - JWT_SECRET=your-super-secret-jwt-key-change-this-in-production-12345678
+      - JWT_REFRESH_SECRET=your-super-secret-refresh-key-change-this-in-production-12345678
+      - JWT_EXPIRES_IN=7d
+      - JWT_REFRESH_EXPIRES_IN=30d
+      - API_PREFIX=api/v1
+      - FRONTEND_URL=http://localhost:5173
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - seka-network
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  seka-network:
+    driver: bridge
