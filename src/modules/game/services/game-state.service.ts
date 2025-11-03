@@ -1,15 +1,16 @@
-import { Injectable, BadRequestException, Inject } from '@nestjs/common';
+import { Injectable, BadRequestException, Inject, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Game } from '../entities/game.entity';
 import { GamePlayer } from '../entities/game-player.entity';
+import { User } from '../../users/entities/user.entity'; // Added for user data fetch
 import { DeckService } from './deck.service';
 import { HandEvaluatorService } from './hand-evaluator.service';
 import { BettingService } from './betting.service';
 import { GamePhase, GameStatus } from '../types/game-state.types';
 import { Hand } from '../types/card.types';
 import { BettingAction } from '../types/betting.types';
-import { IWalletService, WALLET_SERVICE, WalletTransactionType } from '../interfaces/wallet.interface';
+import { PlatformBalanceService } from '../../users/services/platform-balance.service';
 
 /**
  * GameStateService - Manages complete game flow for Seka Svara
@@ -20,20 +21,23 @@ import { IWalletService, WALLET_SERVICE, WalletTransactionType } from '../interf
  * - Turn management
  * - Showdown logic
  * - Winner determination
- * - Payout distribution
+ * - Payout distribution (using platformScore - database only)
  */
 @Injectable()
 export class GameStateService {
+  private readonly logger = new Logger(GameStateService.name);
+  
   constructor(
     @InjectRepository(Game)
     private readonly gamesRepository: Repository<Game>,
     @InjectRepository(GamePlayer)
     private readonly gamePlayersRepository: Repository<GamePlayer>,
+    @InjectRepository(User) // Added for fetching user data
+    private readonly usersRepository: Repository<User>,
     private readonly deckService: DeckService,
     private readonly handEvaluatorService: HandEvaluatorService,
     private readonly bettingService: BettingService,
-    @Inject(WALLET_SERVICE)
-    private readonly walletService: IWalletService,
+    private readonly platformBalanceService: PlatformBalanceService,
   ) {}
 
   /**
@@ -42,8 +46,13 @@ export class GameStateService {
   async initializeGame(game: Game, ante: number = 0): Promise<void> {
     const playerCount = game.players.length;
     
-    // Calculate blind amounts (small blind = ante/2, big blind = ante)
-    const smallBlindAmount = Math.floor(game.ante / 2);
+    // ✅ CRITICAL: Set game.ante from parameter (entry fee from table)
+    game.ante = ante;
+    
+    // ✅ FIXED: For Seka Svara, each player contributes their entry fee to the pot
+    // So small blind = entry fee, big blind = entry fee
+    // This ensures pot = entry_fee × number_of_players
+    const smallBlindAmount = game.ante; // Each player pays full entry fee
     const bigBlindAmount = game.ante;
     
     // Determine positions (dealer, small blind, big blind)
@@ -51,12 +60,22 @@ export class GameStateService {
     const smallBlindPosition = playerCount > 2 ? 1 : 0; // If only 2 players, dealer is also small blind
     const bigBlindPosition = playerCount > 2 ? 2 : 1; // If only 2 players, other player is big blind
     
+    // ✅ FIXED: Initial pot = entry fee × number of players
+    // This represents all players' entry fees collected at the start
+    const initialPot = game.ante * playerCount;
+    
+    this.logger.log(`💰 Initial pot calculation:`);
+    this.logger.log(`   Entry fee (ante): ${game.ante} SEKA`);
+    this.logger.log(`   Number of players: ${playerCount}`);
+    this.logger.log(`   Initial pot: ${initialPot} SEKA (${game.ante} × ${playerCount})`);
+    
     // Initialize game state with blind system
+    // For Seka Svara: pot starts at entry_fee × player_count
     game.state = {
       phase: GamePhase.WAITING, // Start in waiting phase for blind posting
       bettingRound: 0,
       currentPlayerId: null,
-      pot: ante * game.players.length, // Collect antes
+      pot: initialPot, // ✅ FIXED: Start with all entry fees collected
       currentBet: 0,
       bettingHistory: [],
       winners: [],
@@ -74,15 +93,25 @@ export class GameStateService {
 
     game.status = GameStatus.IN_PROGRESS;
 
-    // Collect antes from all players
-    if (ante > 0) {
+    // ✅ NEW: Initialize comprehensive tracking fields
+    game.cardViewers = []; // Empty array - no one has viewed cards yet
+    game.blindPlayers = {}; // Empty object - no blind bets yet
+    game.participantCount = playerCount; // Total number of players participating
+    game.gameResults = {}; // Empty - will be populated when game ends
+
+    // ✅ REMOVED: No longer collecting antes separately
+    // The entry fee concept is handled by blinds:
+    // - Small blind = entryFee / 2 (5 USDT if entry is 10 USDT)
+    // - Big blind = entryFee (10 USDT)
+    // - Total initial pot = 5 + 10 = 15 USDT for 2 players
+    // However, for a simpler model where entry fee = pot contribution:
+    // We should set blinds to equal the entry fee per player
+    
+    // ✅ CRITICAL: Always reset player state for new round (regardless of ante)
       for (const player of game.players) {
-        player.totalBet = ante;
+      player.totalBet = 0; // Start at 0, will increase when blinds are posted
         player.hasActed = false;
-        
-        // TODO: Integrate with Developer 3's wallet service
-        // await this.walletService.deductBalance(player.userId, ante, {...});
-      }
+      player.hasSeenCards = false; // ✅ CRITICAL: Reset hasSeenCards for new round
     }
 
     // Deal cards to all players
@@ -138,6 +167,13 @@ export class GameStateService {
   async executeShowdown(game: Game): Promise<void> {
     game.state.phase = GamePhase.SHOWDOWN;
 
+    // ✅ Save final pot amount BEFORE distribution (for showdown broadcast)
+    const finalPotAmount = game.state.pot;
+    if (!game.state.finalPot) {
+      game.state.finalPot = finalPotAmount;
+    }
+    this.logger.log(`💰 Saving final pot for showdown: ${finalPotAmount} SEKA`);
+
     // Get all active (non-folded) players
     const activePlayers = game.players.filter(p => !p.folded && p.isActive);
 
@@ -148,7 +184,9 @@ export class GameStateService {
     // If only one player, they win automatically
     if (activePlayers.length === 1) {
       game.state.winners = [activePlayers[0].userId];
-      await this.distributePot(game);
+      const updatedBalances = await this.distributePot(game);
+      // Store for gateway to emit
+      game.state.updatedBalances = Array.from(updatedBalances.entries()).map(([userId, balance]) => ({ userId, balance }));
       return;
     }
 
@@ -182,7 +220,10 @@ export class GameStateService {
     }
 
     // Distribute winnings
-    await this.distributePot(game);
+    const updatedBalances = await this.distributePot(game);
+    
+    // ✅ Store updated balances for gateway to emit via socket
+    game.state.updatedBalances = Array.from(updatedBalances.entries()).map(([userId, balance]) => ({ userId, balance }));
 
     // Mark game as completed
     game.state.phase = GamePhase.COMPLETED;
@@ -194,12 +235,25 @@ export class GameStateService {
 
   /**
    * Distribute pot to winner(s)
+   * Returns map of userId to new balance for real-time updates
    */
-  private async distributePot(game: Game): Promise<void> {
+  private async distributePot(game: Game): Promise<Map<string, number>> {
+    const updatedBalances = new Map<string, number>(); // Track balance changes for socket updates
     const winners = game.state.winners;
     
     if (winners.length === 0) {
       throw new BadRequestException('No winners to distribute pot to');
+    }
+
+    // ✅ Initialize gameResults structure
+    if (!game.gameResults) {
+      game.gameResults = {};
+    }
+    if (!game.gameResults.winners) {
+      game.gameResults.winners = [];
+    }
+    if (!game.gameResults.losers) {
+      game.gameResults.losers = [];
     }
 
     // Calculate side pots if there are all-in players
@@ -207,11 +261,30 @@ export class GameStateService {
 
     if (sidePots.length > 0) {
       // Distribute side pots
-      await this.distributeSidePots(game, sidePots);
+      const sidePotBalances = await this.distributeSidePots(game, sidePots);
+      // ✅ Merge side pot balance updates
+      for (const [userId, balance] of sidePotBalances.entries()) {
+        updatedBalances.set(userId, balance);
+      }
     } else {
       // Simple case: split main pot among winners
-      const potAmount = game.state.pot;
-      const amountPerWinner = potAmount / winners.length;
+      const potAmount = Math.round(game.state.pot); // ✅ Ensure integer
+      
+      // ✅ FIXED: Winner receives 95% of pot, 5% goes to platform
+      const PLATFORM_FEE_PERCENT = 5;
+      const platformFee = Math.round((potAmount * PLATFORM_FEE_PERCENT) / 100); // ✅ Round fee
+      const winnerTotalAmount = potAmount - platformFee;
+      const amountPerWinner = Math.round(winnerTotalAmount / winners.length); // ✅ Round per-winner amount
+
+      this.logger.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+      this.logger.log(`💰 POT DISTRIBUTION - MAIN POT`);
+      this.logger.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+      this.logger.log(`   Total Pot: ${potAmount} SEKA`);
+      this.logger.log(`   Platform Fee (${PLATFORM_FEE_PERCENT}%): ${platformFee} SEKA`);
+      this.logger.log(`   Winner(s) Amount (95%): ${winnerTotalAmount} SEKA`);
+      this.logger.log(`   Number of Winners: ${winners.length}`);
+      this.logger.log(`   Amount per Winner: ${amountPerWinner} SEKA`);
+      this.logger.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
 
       for (const winnerId of winners) {
         const winnerPlayer = game.players.find(p => p.userId === winnerId);
@@ -219,24 +292,76 @@ export class GameStateService {
           winnerPlayer.winnings = amountPerWinner;
           winnerPlayer.isWinner = true;
 
-          // Credit winnings to winner's wallet
-          await this.walletService.addBalance(winnerId, amountPerWinner, {
-            type: WalletTransactionType.GAME_WINNINGS,
+          this.logger.log(`💸 Crediting winner ${winnerId}...`);
+
+          // Credit winnings to winner's platform balance (database only)
+          const newBalance = await this.platformBalanceService.addBalance(winnerId, amountPerWinner, {
+            type: 'game_win',
             gameId: game.id,
-            description: `Won ${amountPerWinner} from pot in game ${game.id}`,
-            timestamp: new Date(),
+            description: `Won ${amountPerWinner} SEKA (95% of ${potAmount} pot) in game ${game.id}`,
+          });
+          
+          // ✅ Store updated balance for socket notification
+          updatedBalances.set(winnerId, newBalance);
+          
+          this.logger.log(`✅ Successfully credited ${amountPerWinner} SEKA to winner ${winnerId}`);
+
+          // ✅ Record winner in gameResults
+          const evaluatedHand = game.state.playerStates?.[winnerId]?.evaluatedHand;
+          game.gameResults.winners.push({
+            userId: winnerId,
+            amount: amountPerWinner,
+            handDescription: evaluatedHand?.description || 'Unknown hand',
           });
         }
+      }
+      
+      // Log platform fee collection (actual implementation would credit platform account)
+      this.logger.log(`🏦 Platform collected ${platformFee} SEKA fee (${PLATFORM_FEE_PERCENT}% of ${potAmount})`);
+    }
+
+    // ✅ Record losers (all non-winner players who contributed to pot)
+    // NOTE: Losers' balances were already deducted when they placed bets during the game
+    // We only need to record their losses in gameResults for tracking purposes
+    const loserPlayers = game.players.filter(p => !winners.includes(p.userId));
+    for (const loser of loserPlayers) {
+      const amountLost = loser.totalBet || 0; // How much they bet and lost
+      
+      if (amountLost > 0) {
+        this.logger.log(`📉 Player ${loser.userId} lost ${amountLost} SEKA in game`);
+
+        // Record loser in gameResults
+        game.gameResults.losers.push({
+          userId: loser.userId,
+          amountLost: amountLost,
+        });
       }
     }
 
     await this.gamesRepository.save(game);
+    
+    // ✅ Return updated balances for socket notification
+    this.logger.log(`💰 Updated balances for ${updatedBalances.size} winner(s) from distributePot`);
+    return updatedBalances;
   }
 
   /**
    * Distribute side pots (for all-in scenarios)
+   * Returns map of userId to new balance for real-time updates
    */
-  private async distributeSidePots(game: Game, sidePots: any[]): Promise<void> {
+  private async distributeSidePots(game: Game, sidePots: any[]): Promise<Map<string, number>> {
+    const updatedBalances = new Map<string, number>(); // Track balance changes for socket updates
+    // ✅ Ensure gameResults structure exists
+    if (!game.gameResults) {
+      game.gameResults = {};
+    }
+    if (!game.gameResults.winners) {
+      game.gameResults.winners = [];
+    }
+    if (!game.gameResults.losers) {
+      game.gameResults.losers = [];
+    }
+
     for (const pot of sidePots) {
       const eligiblePlayers = pot.eligiblePlayers;
       
@@ -257,7 +382,23 @@ export class GameStateService {
 
       // Determine winners for this pot
       const potWinners = this.handEvaluatorService.determineWinner(evaluatedHands);
-      const amountPerWinner = pot.amount / potWinners.length;
+      
+      // ✅ FIXED: Winner receives 95% of pot, 5% goes to platform
+      const PLATFORM_FEE_PERCENT = 5;
+      const potAmountRounded = Math.round(pot.amount); // ✅ Ensure integer
+      const platformFee = Math.round((potAmountRounded * PLATFORM_FEE_PERCENT) / 100); // ✅ Round fee
+      const winnerTotalAmount = potAmountRounded - platformFee;
+      const amountPerWinner = Math.round(winnerTotalAmount / potWinners.length); // ✅ Round per-winner amount
+
+      this.logger.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+      this.logger.log(`💰 SIDE POT DISTRIBUTION`);
+      this.logger.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+      this.logger.log(`   Side Pot Amount: ${potAmountRounded} SEKA`);
+      this.logger.log(`   Platform Fee (${PLATFORM_FEE_PERCENT}%): ${platformFee} SEKA`);
+      this.logger.log(`   Winner(s) Amount (95%): ${winnerTotalAmount} SEKA`);
+      this.logger.log(`   Number of Winners: ${potWinners.length}`);
+      this.logger.log(`   Amount per Winner: ${amountPerWinner} SEKA`);
+      this.logger.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
 
       // Distribute this pot
       for (const winnerId of potWinners) {
@@ -266,11 +407,65 @@ export class GameStateService {
           winnerPlayer.winnings += amountPerWinner;
           winnerPlayer.isWinner = true;
 
-          // TODO: Integrate with Developer 3's wallet service
-          // await this.walletService.addBalance(winnerId, amountPerWinner, {...});
+          this.logger.log(`💸 Crediting side pot winner ${winnerId}...`);
+
+          // Credit winnings to winner's platform balance (database only)
+          const newBalance = await this.platformBalanceService.addBalance(winnerId, amountPerWinner, {
+            type: 'game_win',
+            gameId: game.id,
+            description: `Won ${amountPerWinner} SEKA (95% of ${potAmountRounded} side pot) in game ${game.id}`,
+          });
+          
+          // ✅ Store updated balance for socket notification
+          updatedBalances.set(winnerId, newBalance);
+          
+          this.logger.log(`✅ Successfully credited ${amountPerWinner} SEKA to side pot winner ${winnerId}`);
+
+          // ✅ Record winner in gameResults (side pot)
+          const evaluatedHand = game.state.playerStates?.[winnerId]?.evaluatedHand;
+          const existingWinner = game.gameResults.winners.find(w => w.userId === winnerId);
+          if (existingWinner) {
+            // Winner already exists (won multiple pots), add to their total
+            existingWinner.amount += amountPerWinner;
+          } else {
+            // New winner
+            game.gameResults.winners.push({
+              userId: winnerId,
+              amount: amountPerWinner,
+              handDescription: evaluatedHand?.description || 'Unknown hand',
+            });
+          }
+        }
+      }
+      
+      this.logger.log(`🏦 Platform collected ${platformFee} SEKA fee from side pot`);
+    }
+
+    // ✅ Record losers (all non-winner players who contributed to pot)
+    // NOTE: Losers' balances were already deducted when they placed bets during the game
+    // We only need to record their losses in gameResults for tracking purposes
+    const winnerUserIds = game.gameResults.winners.map(w => w.userId);
+    const loserPlayers = game.players.filter(p => !winnerUserIds.includes(p.userId));
+    for (const loser of loserPlayers) {
+      const amountLost = loser.totalBet || 0; // How much they bet and lost
+      
+      if (amountLost > 0) {
+        this.logger.log(`📉 Player ${loser.userId} lost ${amountLost} SEKA in game`);
+
+        // Record loser in gameResults
+        const existingLoser = game.gameResults.losers.find(l => l.userId === loser.userId);
+        if (!existingLoser) {
+          game.gameResults.losers.push({
+            userId: loser.userId,
+            amountLost: amountLost,
+          });
         }
       }
     }
+    
+    // ✅ Return updated balances for socket notification
+    this.logger.log(`💰 Updated balances for ${updatedBalances.size} winner(s)`);
+    return updatedBalances;
   }
 
   /**
@@ -278,22 +473,54 @@ export class GameStateService {
    */
   shouldMoveToShowdown(game: Game): boolean {
     // Move to showdown if:
-    // 1. All betting rounds complete (3 rounds max)
-    // 2. Only one active player remains (already handled in betting)
-    // 3. All players have called/checked
+    // 1. Only one active player remains
+    // 2. All players have called/matched the current bet
+    // 3. All betting rounds complete (3 rounds max as fallback)
 
     const activePlayers = game.players.filter(p => p.isActive && !p.folded && !p.allIn);
     
+    this.logger.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    this.logger.log('🎯 CHECKING IF SHOULD MOVE TO SHOWDOWN');
+    this.logger.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    this.logger.log(`📊 Active players: ${activePlayers.length}`);
+    this.logger.log(`📋 Player details:`);
+    activePlayers.forEach(p => {
+      this.logger.log(`   • ${p.userId}: hasActed=${p.hasActed}, currentBet=${p.currentBet}, folded=${p.folded}`);
+    });
+    this.logger.log(`💰 Game currentBet: ${game.state.currentBet}`);
+    
     // If only one non-all-in player, go to showdown
     if (activePlayers.length <= 1) {
+      this.logger.log('✅ Moving to showdown: Only one active player remains');
+      this.logger.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
       return true;
     }
 
-    // If max betting rounds reached
+    // ✅ NEW: Check if all active players have called (matched the current bet)
+    // This is the standard poker rule: when everyone has called, move to showdown
+    const allPlayersHaveActed = activePlayers.every(p => p.hasActed);
+    const allBetsMatched = activePlayers.every(p => p.currentBet === game.state.currentBet);
+    
+    this.logger.log(`🔍 All players acted? ${allPlayersHaveActed}`);
+    this.logger.log(`🔍 All bets matched? ${allBetsMatched}`);
+    
+    if (allPlayersHaveActed && allBetsMatched) {
+      this.logger.log('✅ Moving to showdown: All players have called and matched bets');
+      this.logger.log(`   Current bet: ${game.state.currentBet}`);
+      this.logger.log(`   Players: ${activePlayers.map(p => `${p.userId}:${p.currentBet}`).join(', ')}`);
+      this.logger.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+      return true;
+    }
+
+    // If max betting rounds reached (fallback)
     if (game.state.bettingRound >= 3) {
+      this.logger.log('✅ Moving to showdown: Max betting rounds (3) reached');
+      this.logger.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
       return true;
     }
 
+    this.logger.log('❌ NOT moving to showdown yet');
+    this.logger.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     return false;
   }
 
@@ -348,16 +575,34 @@ export class GameStateService {
 
   /**
    * Get game state summary for display
+   * ⚠️ DEPRECATED - Use getSanitizedGameStateForUser instead for security
    */
   async getGameStateSummary(game: Game) {
-    // Fetch current balance for each player
+    // Fetch current platform score AND user info for each player
     const playersWithBalance = await Promise.all(
       game.players.map(async (p) => {
-        const balance = await this.walletService.getBalance(p.userId);
+        const balance = await this.platformBalanceService.getBalance(p.userId);
+        
+        // ✅ FETCH USER DATA (email, username, avatar) from database
+        const user = await this.usersRepository.findOne({
+          where: { id: p.userId },
+          select: ['id', 'email', 'username', 'avatar']
+        });
+        
+        // ✅ Use current platform balance (total SEKA score)
+        // This displays the player's current total platform balance
+        
         return {
           userId: p.userId,
+          // ✅ Include user identity data for frontend display
+          email: user?.email || null,
+          username: user?.username || null,
+          name: user?.username || null, // Alias for compatibility
+          avatar: user?.avatar || null,
+          // Game state data
           position: p.position,
-          balance, // Include current wallet balance
+          balance: balance, // Current platform balance (total SEKA score)
+          availableBalance: balance, // Available balance for betting
           currentBet: p.currentBet,
           totalBet: p.totalBet,
           status: p.status,
@@ -365,10 +610,96 @@ export class GameStateService {
           winnings: p.winnings,
           hasActed: p.hasActed,
           hasSeenCards: p.hasSeenCards, // For blind betting
-          // ALWAYS include hand - frontend handles hiding based on hasSeenCards
-          hand: p.hand,
-          handScore: p.handScore, // Evaluated hand score
-          handDescription: p.handDescription, // Hand description (e.g., "Three 7s")
+          // 🔒 SECURITY: Do NOT include hand - use getSanitizedGameStateForUser instead
+          hand: null,
+          handScore: null,
+          handDescription: null,
+        };
+      })
+    );
+
+    return {
+      gameId: game.id,
+      dealerId: game.dealerId, // Current dealer
+      phase: game.state.phase,
+      status: game.status,
+      bettingRound: game.state.bettingRound,
+      currentPlayerId: game.state.currentPlayerId,
+      pot: game.state.pot,
+      finalPot: game.state.finalPot, // ✅ Final pot before distribution (for showdown display)
+      currentBet: game.state.currentBet,
+      winners: game.state.winners,
+      players: playersWithBalance,
+      bettingHistory: game.state.bettingHistory,
+      startedAt: game.state.startedAt,
+      finishedAt: game.finishedAt,
+      // Blind system data
+      smallBlindAmount: game.state.smallBlindAmount,
+      bigBlindAmount: game.state.bigBlindAmount,
+      dealerPosition: game.state.dealerPosition,
+      smallBlindPosition: game.state.smallBlindPosition,
+      bigBlindPosition: game.state.bigBlindPosition,
+      blindsPosted: game.state.blindsPosted,
+      gameStartDelay: game.state.gameStartDelay,
+    };
+  }
+
+  /**
+   * 🔒 SECURE: Get sanitized game state for a specific user
+   * Only includes card data for:
+   * 1. The requesting user (if they've viewed their cards)
+   * 2. During showdown (all players who reached showdown)
+   */
+  async getSanitizedGameStateForUser(game: Game, requestingUserId: string) {
+    const isShowdown = game.state.phase === GamePhase.SHOWDOWN;
+    
+    // Fetch current platform score AND user info for each player
+    const playersWithBalance = await Promise.all(
+      game.players.map(async (p) => {
+        const balance = await this.platformBalanceService.getBalance(p.userId);
+        
+        // ✅ FETCH USER DATA (email, username, avatar) from database
+        const user = await this.usersRepository.findOne({
+          where: { id: p.userId },
+          select: ['id', 'email', 'username', 'avatar']
+        });
+        
+        // 🔒 SECURITY: Only include hand if:
+        // 1. It's the requesting user AND they've seen their cards
+        // 2. OR it's showdown (everyone's cards are revealed)
+        const isRequestingUser = p.userId === requestingUserId;
+        const canSeeCards = isShowdown || (isRequestingUser && p.hasSeenCards);
+        
+        // ✅ FIX: Hand scores should be visible for ALL players who have viewed cards
+        // This allows the "11P" badge to display for all users, even though actual cards stay hidden
+        const canSeeHandScore = p.hasSeenCards || isShowdown;
+        
+        // ✅ Use current platform balance (total SEKA score)
+        // This displays the player's current total platform balance
+        
+        return {
+          userId: p.userId,
+          // ✅ Include user identity data for frontend display
+          email: user?.email || null,
+          username: user?.username || null,
+          name: user?.username || null, // Alias for compatibility
+          avatar: user?.avatar || null,
+          // Game state data
+          position: p.position,
+          balance: balance, // Current platform balance (total SEKA score)
+          availableBalance: balance, // Available balance for betting
+          currentBet: p.currentBet,
+          totalBet: p.totalBet,
+          status: p.status,
+          isWinner: p.isWinner,
+          winnings: p.winnings,
+          hasActed: p.hasActed,
+          hasSeenCards: p.hasSeenCards, // For blind betting
+          // 🔒 SECURITY: Only include hand data if allowed
+          hand: canSeeCards ? p.hand : null,
+          // ✅ FIX: Include hand score for ALL players who have viewed cards (not just requesting user)
+          handScore: canSeeHandScore ? p.handScore : null,
+          handDescription: canSeeHandScore ? p.handDescription : null,
         };
       })
     );
@@ -395,6 +726,11 @@ export class GameStateService {
       bigBlindPosition: game.state.bigBlindPosition,
       blindsPosted: game.state.blindsPosted,
       gameStartDelay: game.state.gameStartDelay,
+      // ✅ NEW: Comprehensive game tracking
+      cardViewers: game.cardViewers || [],
+      blindPlayers: game.blindPlayers || {},
+      participantCount: game.participantCount || game.players.length,
+      gameResults: game.gameResults || {},
     };
   }
 
@@ -408,8 +744,8 @@ export class GameStateService {
     // Post small blind
     const smallBlindPlayer = players[state.smallBlindPosition];
     if (smallBlindPlayer) {
-      await this.walletService.deductBalance(smallBlindPlayer.userId, state.smallBlindAmount, {
-        type: WalletTransactionType.GAME_BLIND,
+      await this.platformBalanceService.deductBalance(smallBlindPlayer.userId, state.smallBlindAmount, {
+        type: 'game_blind',
         gameId: game.id,
         description: 'Small blind posted'
       });
@@ -426,8 +762,8 @@ export class GameStateService {
     // Post big blind
     const bigBlindPlayer = players[state.bigBlindPosition];
     if (bigBlindPlayer) {
-      await this.walletService.deductBalance(bigBlindPlayer.userId, state.bigBlindAmount, {
-        type: WalletTransactionType.GAME_BLIND,
+      await this.platformBalanceService.deductBalance(bigBlindPlayer.userId, state.bigBlindAmount, {
+        type: 'game_blind',
         gameId: game.id,
         description: 'Big blind posted'
       });

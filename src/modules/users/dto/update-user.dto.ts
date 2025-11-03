@@ -1,5 +1,5 @@
 import { ApiProperty, PartialType } from '@nestjs/swagger';
-import { IsOptional, IsString, IsUrl, IsNumber } from 'class-validator';
+import { IsOptional, IsString, IsNumber } from 'class-validator';
 import { CreateUserDto } from './create-user.dto';
 
 export class UpdateUserDto extends PartialType(CreateUserDto) {
@@ -8,9 +8,9 @@ export class UpdateUserDto extends PartialType(CreateUserDto) {
   @IsString()
   username?: string;
 
-  @ApiProperty({ required: false })
+  @ApiProperty({ required: false, description: 'Avatar URL or base64 image string' })
   @IsOptional()
-  @IsUrl()
+  @IsString()
   avatar?: string;
 
   @ApiProperty({ required: false })

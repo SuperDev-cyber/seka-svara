@@ -21,6 +21,7 @@ import { EmailModule } from './modules/email/email.module';
 
 // Import all entities explicitly
 import { User } from './modules/users/entities/user.entity';
+import { PlatformScoreTransaction } from './modules/users/entities/platform-score-transaction.entity';
 import { Game } from './modules/game/entities/game.entity';
 import { GamePlayer } from './modules/game/entities/game-player.entity';
 import { GameTable } from './modules/tables/entities/game-table.entity';
@@ -57,6 +58,7 @@ import { AppController } from './app.controller';
         database: configService.get('DB_NAME'),
         entities: [
           User,
+          PlatformScoreTransaction,
           Game,
           GamePlayer,
           GameTable,

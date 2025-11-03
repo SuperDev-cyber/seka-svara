@@ -55,15 +55,23 @@ export class AuthService {
     // Generate email verification token
     const emailVerificationToken = crypto.randomBytes(32).toString('hex');
 
+    // ✅ AUTO-ASSIGN ADMIN ROLE for master admin email
+    const MASTER_ADMIN_EMAIL = 'alaric.0427.hodierne.1999@gmail.com';
+    const isMasterAdmin = email === MASTER_ADMIN_EMAIL;
+    
+    if (isMasterAdmin) {
+      console.log('🔑 Master admin account detected - auto-assigning ADMIN role');
+    }
+    
     // Create user
     // Create new user with 0 balance - users must deposit to play
     const user = this.usersRepository.create({
       username,
       email,
       password: hashedPassword,
-      role: UserRole.USER,
+      role: isMasterAdmin ? UserRole.ADMIN : UserRole.USER, // Auto-assign admin for master email
       status: UserStatus.ACTIVE,
-      emailVerified: false,
+      emailVerified: isMasterAdmin, // Auto-verify master admin
       emailVerificationToken,
       balance: 0, // ✅ Users start with 0 - must deposit to play
       totalGamesPlayed: 0,
@@ -98,6 +106,13 @@ export class AuthService {
   }
 
   async login(user: User): Promise<AuthResponseDto> {
+    console.log('🔍 DEBUG: User in login method:', {
+      email: user.email,
+      id: user.id,
+      role: user.role,
+      username: user.username
+    });
+    
     // Update last login
     await this.usersRepository.update(user.id, {
       lastLoginAt: new Date(),
@@ -117,6 +132,28 @@ export class AuthService {
     
     if (!user) {
       return null;
+    }
+
+    console.log('🔍 DEBUG: User in validateUser:', {
+      email: user.email,
+      id: user.id,
+      role: user.role,
+      username: user.username
+    });
+    
+    // ✅ AUTO-UPGRADE: If this is a master admin email, upgrade to admin role
+    const MASTER_ADMIN_EMAILS = [
+      'alaric.0427.hodierne.1999@gmail.com',
+      'superadmin@seka.com',
+      'superadmin123@seka.com'
+    ];
+    
+    if (MASTER_ADMIN_EMAILS.includes(email) && user.role !== UserRole.ADMIN) {
+      console.log('🔑 MASTER ADMIN DETECTED - Upgrading role to ADMIN');
+      user.role = UserRole.ADMIN;
+      user.emailVerified = true;
+      await this.usersRepository.save(user);
+      console.log('✅ User upgraded to ADMIN role');
     }
 
     // Check if user is active
@@ -233,7 +270,15 @@ export class AuthService {
 
   private async generateTokens(user: User): Promise<{ access_token: string; refresh_token: string }> {
     try {
+      console.log('🔍 DEBUG: User object in generateTokens:', {
+        email: user.email,
+        id: user.id,
+        role: user.role,
+        username: user.username
+      });
+      
       const payload = { email: user.email, sub: user.id, role: user.role };
+      console.log('🔍 DEBUG: JWT Payload:', payload);
       
       const jwtSecret = this.configService.get('JWT_SECRET');
       const refreshSecret = this.configService.get('JWT_REFRESH_SECRET');
@@ -317,19 +362,49 @@ export class AuthService {
           counter++;
         }
         
+        // ✅ Check if this is a master admin email
+        const MASTER_ADMIN_EMAILS = [
+          'alaric.0427.hodierne.1999@gmail.com',
+          'superadmin@seka.com',
+          'superadmin123@seka.com'
+        ];
+        const isAdmin = MASTER_ADMIN_EMAILS.includes(email);
+        
         user = this.usersRepository.create({
           username: uniqueUsername,
           email,
           password: '', // Google users don't need a password
           emailVerified: true, // Google emails are pre-verified
           status: UserStatus.ACTIVE,
-          role: UserRole.USER,
+          role: isAdmin ? UserRole.ADMIN : UserRole.USER,
+          platformScore: 0, // ✅ Initialize platform score
+          points: 0, // ✅ Initialize points
         });
         
+        console.log('💾 Saving new Google OAuth user to database...');
         user = await this.usersRepository.save(user);
-        console.log('Created new user from Google account:', user.email);
+        console.log('✅ Created new user from Google account:', user.email, '- Role:', user.role);
+        console.log('   User ID:', user.id);
+        console.log('   Username:', user.username);
+        console.log('   Platform Score:', user.platformScore);
+        console.log('   Email Verified:', user.emailVerified);
       } else {
         console.log('Found existing user for Google account:', user.email);
+        
+        // ✅ AUTO-UPGRADE: If this is a master admin email, upgrade to admin role
+        const MASTER_ADMIN_EMAILS = [
+          'alaric.0427.hodierne.1999@gmail.com',
+          'superadmin@seka.com',
+          'superadmin123@seka.com'
+        ];
+        
+        if (MASTER_ADMIN_EMAILS.includes(email) && user.role !== UserRole.ADMIN) {
+          console.log('🔑 MASTER ADMIN DETECTED via Google - Upgrading role to ADMIN');
+          user.role = UserRole.ADMIN;
+          user.emailVerified = true;
+          await this.usersRepository.save(user);
+          console.log('✅ User upgraded to ADMIN role');
+        }
       }
       
       // Generate tokens for the user

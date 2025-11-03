@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Logger, Inject, forwardRef } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Wallet } from './entities/wallet.entity';
@@ -9,6 +9,8 @@ import { BlockchainService } from '../blockchain/blockchain.service';
 import { DepositDto } from './dto/deposit.dto';
 import { WithdrawDto } from './dto/withdraw.dto';
 import { getAdminWalletAddress } from '../../config/admin-wallet.config';
+import { PlatformScoreService } from '../users/services/platform-score.service';
+import { ScoreTransactionType } from '../users/entities/platform-score-transaction.entity';
 
 @Injectable()
 export class WalletService {
@@ -23,6 +25,8 @@ export class WalletService {
     private usersRepository: Repository<User>,
     private addressGeneratorService: AddressGeneratorService,
     private blockchainService: BlockchainService,
+    @Inject(forwardRef(() => PlatformScoreService))
+    private platformScoreService: PlatformScoreService,
   ) {}
 
   async getUserWallet(userId: string) {
@@ -41,18 +45,30 @@ export class WalletService {
     return wallet;
   }
 
-  async getBalance(userId: string) {
+  async getBalance(userId: string): Promise<{
+    totalBalance: number;
+    availableBalance: number;
+    lockedBalance: number;
+    platformScore: number;
+  }> {
     const wallet = await this.getUserWallet(userId);
+    
+    // Also fetch user's platform score (Sekasvara Score)
+    const user = await this.usersRepository.findOne({ where: { id: userId } });
+    
     return {
-      totalBalance: wallet.balance,
-      availableBalance: wallet.availableBalance,
-      lockedBalance: wallet.lockedBalance,
+      totalBalance: Number(wallet.balance),
+      availableBalance: Number(wallet.availableBalance),
+      lockedBalance: Number(wallet.lockedBalance),
+      platformScore: Number(user?.platformScore || 0), // Sekasvara Score for display
     };
   }
 
   /**
-   * Sync contract balance to database
-   * This syncs the SEKA contract balance from the blockchain to the user's database balance
+   * Sync contract balance to database (DUAL BALANCE SYSTEM)
+   * This syncs the SEKA contract balance from the blockchain to BOTH:
+   * 1. user.balance (locked funds in ecosystem)
+   * 2. user.platformScore (management tracking)
    */
   async syncContractBalance(userId: string, contractBalance: number) {
     const user = await this.usersRepository.findOne({ where: { id: userId } });
@@ -61,25 +77,47 @@ export class WalletService {
       throw new NotFoundException('User not found');
     }
 
+    const oldBalance = Number(user.balance);
+    const oldPlatformScore = Number(user.platformScore);
+    const balanceDifference = contractBalance - oldBalance;
+
     this.logger.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-    this.logger.log(`🔄 SYNCING CONTRACT BALANCE TO DATABASE`);
+    this.logger.log(`🔄 SYNCING CONTRACT BALANCE (SEKA Balance Only)`);
     this.logger.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
     this.logger.log(`👤 User: ${user.email} (${user.id})`);
-    this.logger.log(`📊 Old DB Balance: ${user.balance}`);
+    this.logger.log(`📊 Old SEKA Balance: ${oldBalance}`);
+    this.logger.log(`🏆 Current Seka-Svara Score: ${oldPlatformScore} (unchanged)`);
     this.logger.log(`💰 New Contract Balance: ${contractBalance}`);
+    this.logger.log(`📈 Difference: ${balanceDifference}`);
     this.logger.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
 
-    // Update user's database balance to match contract balance
+    // ✅ ONLY update SEKA balance (locked funds in ecosystem)
+    // ❌ DO NOT update platformScore here - it's updated ONLY in confirmDeposit()
     user.balance = contractBalance;
+    // user.platformScore is NOT changed - it's managed separately for gameplay
     await this.usersRepository.save(user);
 
-    this.logger.log(`✅ Balance synced successfully!`);
+    // ℹ️ NOTE: platformScore (Seka-Svara Score) is ONLY updated in:
+    // 1. confirmDeposit() - when deposit is confirmed
+    // 2. PlatformBalanceService - during gameplay (wins/losses)
+    // 3. Admin Panel - manual adjustments
+    if (balanceDifference > 0) {
+      this.logger.log(`💰 Deposit detected! SEKA Balance synced (platformScore will be updated in confirmDeposit)`);
+    } else if (balanceDifference < 0) {
+      this.logger.log(`💸 Balance decrease detected! SEKA Balance synced (platformScore unchanged)`);
+    }
+
+    this.logger.log(`✅ Balance sync complete!`);
+    this.logger.log(`💳 SEKA Balance: ${oldBalance} → ${user.balance}`);
+    this.logger.log(`🏆 Seka-Svara Score: ${oldPlatformScore} (unchanged - managed separately)`);
 
     return {
       success: true,
-      oldBalance: user.balance,
+      oldBalance,
       newBalance: contractBalance,
-      message: 'Balance synced from contract to database',
+      oldPlatformScore,
+      newPlatformScore: user.platformScore,
+      message: 'Dual balance synced: SEKA balance + Seka-Svara Score updated',
     };
   }
 
@@ -314,32 +352,52 @@ export class WalletService {
     }
     
     this.logger.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-    this.logger.log(`✅ CONFIRMING DEPOSIT`);
+    this.logger.log(`✅ CONFIRMING DEPOSIT (DUAL BALANCE SYSTEM)`);
     this.logger.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
     this.logger.log(`📄 Transaction ID: ${transaction.id}`);
     this.logger.log(`👤 User: ${user.email} (${user.id})`);
-    this.logger.log(`💰 Amount: ${transaction.amount} USDT`);
-    this.logger.log(`💳 Balance Before: ${user.balance} USDT`);
+    this.logger.log(`💰 Amount: ${transaction.amount} SEKA`);
+    this.logger.log(`💳 SEKA Balance Before: ${user.balance}`);
+    this.logger.log(`🏆 Seka-Svara Score Before: ${user.platformScore}`);
     
     // Update transaction status
     transaction.status = TransactionStatus.CONFIRMED;
     transaction.confirmedAt = new Date();
     transaction.confirmations = 1; // In real implementation, get from blockchain
     
-    // ✅ CREDIT USER'S VIRTUAL BALANCE (this is what they play games with)
-    const oldBalance = user.balance;
-    user.balance = Number(user.balance) + Number(transaction.amount);
+    // ✅ CREDIT BOTH BALANCES (DUAL SYSTEM)
+    const oldBalance = Number(user.balance);
+    const oldPlatformScore = Number(user.platformScore);
+    const depositAmount = Number(transaction.amount);
+    
+    // 1. Update SEKA Balance (locked funds in ecosystem)
+    user.balance = oldBalance + depositAmount;
+    
+    // 2. Update Seka-Svara Score (management tracking) - MIRRORS SEKA BALANCE
+    user.platformScore = oldPlatformScore + depositAmount;
     
     // Also update wallet balance for consistency (though games use user.balance)
-    wallet.balance = Number(wallet.balance) + Number(transaction.amount);
-    wallet.availableBalance = Number(wallet.availableBalance) + Number(transaction.amount);
+    wallet.balance = Number(wallet.balance) + depositAmount;
+    wallet.availableBalance = Number(wallet.availableBalance) + depositAmount;
     
+    // Save to database
     await this.transactionsRepository.save(transaction);
     await this.walletsRepository.save(wallet);
     await this.usersRepository.save(user);
     
-    this.logger.log(`💳 Balance After: ${user.balance} USDT`);
-    this.logger.log(`✅ Virtual balance credited!`);
+    // 3. Create Seka-Svara Score Transaction Record
+    await this.platformScoreService.addScore(
+      user.id,
+      depositAmount,
+      ScoreTransactionType.EARNED,
+      `Deposit confirmed: ${depositAmount} SEKA tokens locked in platform ecosystem`,
+      transaction.id,
+      'wallet_deposit'
+    );
+    
+    this.logger.log(`💳 SEKA Balance After: ${user.balance} SEKA`);
+    this.logger.log(`🏆 Seka-Svara Score After: ${user.platformScore}`);
+    this.logger.log(`✅ Dual balance credited! Both SEKA balance and Seka-Svara Score updated.`);
     this.logger.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
     
     return {
@@ -480,7 +538,7 @@ export class WalletService {
     this.logger.log(`📊 Wagering Stats for ${user.email}:`);
     this.logger.log(`   💰 Total Deposited: ${totalDeposited} SEKA`);
     this.logger.log(`   🎲 Total Wagered: ${totalWagered} SEKA`);
-    this.logger.log(`   💸 Max Withdrawable: ${maxWithdrawable.toFixed(2)} SEKA`);
+    this.logger.log(`   💸 Max Withdrawable: ${maxWithdrawable.toFixed(0)} SEKA`);
     this.logger.log(`   🎮 Game Transactions: ${gameTransactions.length}`);
     
     return {

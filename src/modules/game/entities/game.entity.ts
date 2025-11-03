@@ -59,6 +59,28 @@ export class Game {
   @Column({ nullable: true })
   finishedAt: Date;
 
+  // ✅ NEW: Comprehensive Game Tracking
+  // Track which users have viewed their cards
+  @Column({ type: 'simple-array', nullable: true, default: () => "''" })
+  cardViewers: string[];
+
+  // Track blind bet players and their blind bet counts/amounts
+  @Column({ type: 'json', nullable: true, default: () => "'{}'" })
+  blindPlayers: Record<string, { count: number; totalAmount: number }>;
+
+  // Total number of participants in this game
+  @Column({ type: 'int', default: 0 })
+  participantCount: number;
+
+  // Game results: winners, losers, amounts
+  @Column({ type: 'json', nullable: true, default: () => "'{}'" })
+  gameResults: {
+    winners?: Array<{ userId: string; amount: number; handDescription?: string }>;
+    losers?: Array<{ userId: string; amountLost: number }>;
+    kicked?: Array<{ userId: string; reason?: string }>;
+    leftEarly?: Array<{ userId: string }>;
+  };
+
   @OneToMany(() => GamePlayer, player => player.game)
   players: GamePlayer[];
 

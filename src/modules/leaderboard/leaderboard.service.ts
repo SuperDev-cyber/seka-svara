@@ -31,7 +31,7 @@ export class LeaderboardService {
       ...player,
       winRate:
         player.totalGamesPlayed > 0
-          ? ((player.totalGamesWon / player.totalGamesPlayed) * 100).toFixed(2)
+          ? ((player.totalGamesWon / player.totalGamesPlayed) * 100).toFixed(0)
           : 0,
     }));
   }

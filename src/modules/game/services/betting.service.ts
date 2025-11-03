@@ -5,7 +5,7 @@ import { Game } from '../entities/game.entity';
 import { GamePlayer } from '../entities/game-player.entity';
 import { BettingAction, Bet, Pot } from '../types/betting.types';
 import { GamePhase, GameStatus } from '../types/game-state.types';
-import { IWalletService, WALLET_SERVICE, WalletTransactionType } from '../interfaces/wallet.interface';
+import { PlatformBalanceService } from '../../users/services/platform-balance.service';
 
 /**
  * BettingService - Handles all betting logic for Seka Svara
@@ -21,7 +21,8 @@ import { IWalletService, WALLET_SERVICE, WalletTransactionType } from '../interf
  * 6. Check - Pass without betting
  * 7. All-In - Bet entire balance
  * 
- * CRITICAL: Implements proper balance validation and auto-conversion to ALL-IN
+ * IMPORTANT: Uses SEKA-SVARA-SCORE (platformScore) for ALL betting
+ * NO blockchain transactions - all operations are DATABASE ONLY
  */
 @Injectable()
 export class BettingService {
@@ -32,8 +33,7 @@ export class BettingService {
     private readonly gamesRepository: Repository<Game>,
     @InjectRepository(GamePlayer)
     private readonly gamePlayersRepository: Repository<GamePlayer>,
-    @Inject(WALLET_SERVICE)
-    private readonly walletService: IWalletService,
+    private readonly platformBalanceService: PlatformBalanceService,
   ) {}
 
   /**
@@ -45,14 +45,33 @@ export class BettingService {
     action: BettingAction,
     amount: number = 0,
   ): Promise<void> {
-    // Validate action is allowed (may modify action, e.g., CALL -> FOLD if no balance)
-    const actualAction = await this.validateBettingAction(game, playerId, action, amount);
-
     // Get player
     const player = game.players.find(p => p.userId === playerId);
     if (!player) {
       throw new NotFoundException(`Player ${playerId} not in game`);
     }
+
+    // ✅ AUTO-CALL LOGIC: If this is the last player to act and everyone else has called, auto-call
+    const activePlayers = game.players.filter(p => p.isActive && !p.folded && !p.allIn);
+    const otherActivePlayers = activePlayers.filter(p => p.userId !== playerId);
+    
+    // Check if all OTHER players have acted and matched the current bet
+    const allOthersActed = otherActivePlayers.every(p => p.hasActed);
+    const allOthersMatched = otherActivePlayers.every(p => p.currentBet === game.state.currentBet);
+    const isLastToAct = allOthersActed && allOthersMatched;
+    
+    if (isLastToAct && game.state.currentBet > 0) {
+      this.logger.log(`🎯 AUTO-CALL: Player ${playerId} is last to act, everyone else called. Auto-calling ${game.state.currentBet}`);
+      
+      // Override action to CALL (unless player explicitly folded)
+      if (action !== BettingAction.FOLD) {
+        action = BettingAction.CALL;
+        amount = game.state.currentBet;
+      }
+    }
+
+    // Validate action is allowed (may modify action, e.g., CALL -> FOLD if no balance)
+    const actualAction = await this.validateBettingAction(game, playerId, action, amount);
 
     // Process based on actual action type (may be different from requested action)
     switch (actualAction) {
@@ -95,10 +114,9 @@ export class BettingService {
     // Move to next player
     this.moveToNextPlayer(game);
 
-    // Check if betting round is complete
-    if (this.isBettingRoundComplete(game)) {
-      await this.completeBettingRound(game);
-    }
+    // ✅ REMOVED: isBettingRoundComplete check
+    // Let the game engine handle showdown logic via shouldMoveToShowdown()
+    // This prevents double-checking and flag resetting issues
 
     // Save game state
     await this.gamesRepository.save(game);
@@ -137,7 +155,7 @@ export class BettingService {
     }
 
     // Get player's current balance
-    const balance = await this.walletService.getBalance(playerId);
+    const balance = await this.platformBalanceService.getBalance(playerId);
 
     // Validate amount for betting actions
     if (action === BettingAction.BET || action === BettingAction.RAISE) {
@@ -218,7 +236,7 @@ export class BettingService {
     amount: number,
   ): Promise<void> {
     // FIXED: Check balance and auto-convert to ALL-IN if needed
-    const balance = await this.walletService.getBalance(player.userId);
+    const balance = await this.platformBalanceService.getBalance(player.userId);
     
     if (amount >= balance) {
       this.logger.warn(`Player ${player.userId} bet ${amount} but only has ${balance}, auto-converting to ALL-IN`);
@@ -237,8 +255,8 @@ export class BettingService {
     this.addBetToHistory(game, player.userId, BettingAction.BET, amount);
 
     // FIXED: Deduct from wallet service
-    await this.walletService.deductBalance(player.userId, amount, {
-      type: WalletTransactionType.GAME_BET,
+    await this.platformBalanceService.deductBalance(player.userId, amount, {
+      type: 'game_bet',
       gameId: game.id,
       description: `Bet ${amount} in game ${game.id}`,
     });
@@ -258,7 +276,7 @@ export class BettingService {
     const raiseAmount = amount - player.currentBet;
     
     // FIXED: Check balance and auto-convert to ALL-IN if needed
-    const balance = await this.walletService.getBalance(player.userId);
+    const balance = await this.platformBalanceService.getBalance(player.userId);
     
     if (raiseAmount >= balance) {
       this.logger.warn(`Player ${player.userId} raise ${amount} but only has ${balance}, auto-converting to ALL-IN`);
@@ -283,9 +301,9 @@ export class BettingService {
       }
     });
 
-    // FIXED: Integrate with wallet service
-    await this.walletService.deductBalance(player.userId, raiseAmount, {
-      type: WalletTransactionType.GAME_RAISE,
+    // FIXED: Integrate with platform balance service
+    await this.platformBalanceService.deductBalance(player.userId, raiseAmount, {
+      type: 'game_raise',
       gameId: game.id,
       description: `Raised to ${amount} in game ${game.id}`,
     });
@@ -303,7 +321,7 @@ export class BettingService {
     player: GamePlayer,
   ): Promise<void> {
     const callAmount = game.state.currentBet - player.currentBet;
-    const balance = await this.walletService.getBalance(player.userId);
+    const balance = await this.platformBalanceService.getBalance(player.userId);
     
     // Update player bet
     player.currentBet += callAmount;
@@ -315,9 +333,9 @@ export class BettingService {
     // Log call in history
     this.addBetToHistory(game, player.userId, BettingAction.CALL, callAmount);
 
-    // FIXED: Integrate with wallet service
-    await this.walletService.deductBalance(player.userId, callAmount, {
-      type: WalletTransactionType.GAME_CALL,
+    // FIXED: Integrate with platform balance service
+    await this.platformBalanceService.deductBalance(player.userId, callAmount, {
+      type: 'game_call',
       gameId: game.id,
       description: `Called ${callAmount} in game ${game.id}`,
     });
@@ -339,14 +357,15 @@ export class BettingService {
     // Log fold in history
     this.addBetToHistory(game, player.userId, BettingAction.FOLD, 0);
 
-    // Check if only one player remains
-    const activePlayers = game.players.filter(p => p.isActive && !p.folded);
+    // ✅ FIX: Don't manually set phase to SHOWDOWN or determine winner here
+    // Let the game engine's shouldMoveToShowdown() and advancePhase() handle it
+    // This ensures executeShowdown() is called and the pot is properly distributed
     
+    this.logger.log(`Player ${player.userId} folded`);
+    
+    const activePlayers = game.players.filter(p => p.isActive && !p.folded);
     if (activePlayers.length === 1) {
-      // Game ends immediately - last player wins
-      game.state.phase = GamePhase.SHOWDOWN;
-      game.state.winners = [activePlayers[0].userId];
-      game.status = GameStatus.COMPLETED;
+      this.logger.log(`Only one player remains: ${activePlayers[0].userId} - will trigger showdown in game engine`);
     }
   }
 
@@ -424,7 +443,7 @@ export class BettingService {
     player: GamePlayer,
   ): Promise<void> {
     // FIXED: Get player's REAL balance from wallet service
-    const balance = await this.walletService.getBalance(player.userId);
+    const balance = await this.platformBalanceService.getBalance(player.userId);
     
     if (balance <= 0) {
       throw new BadRequestException(`Player ${player.userId} has no balance to go all-in`);
@@ -457,9 +476,9 @@ export class BettingService {
     // Log all-in in history
     this.addBetToHistory(game, player.userId, BettingAction.ALL_IN, allInAmount);
 
-    // FIXED: Deduct ENTIRE balance from wallet service
-    await this.walletService.deductBalance(player.userId, allInAmount, {
-      type: WalletTransactionType.GAME_ALL_IN,
+    // FIXED: Deduct ENTIRE balance from platform balance service
+    await this.platformBalanceService.deductBalance(player.userId, allInAmount, {
+      type: 'game_all_in',
       gameId: game.id,
       description: `All-in ${allInAmount} in game ${game.id}`,
     });
@@ -529,15 +548,16 @@ export class BettingService {
       }
     });
 
-    // Determine next phase
+    // ✅ FIX: Don't manually set phase to SHOWDOWN here
+    // The game engine will check shouldMoveToShowdown() and properly call executeShowdown()
+    // This ensures the pot is distributed correctly
+    
     const activePlayers = game.players.filter(p => p.isActive && !p.folded);
     
     if (activePlayers.length === 1) {
-      // Only one player left - go to showdown
-      game.state.phase = GamePhase.SHOWDOWN;
+      this.logger.log(`Only one player left - game engine will handle showdown`);
     } else if (game.state.bettingRound >= 3) {
-      // Max betting rounds reached - go to showdown
-      game.state.phase = GamePhase.SHOWDOWN;
+      this.logger.log(`Max betting rounds reached - game engine will handle showdown`);
     } else {
       // Continue to next betting round
       game.state.currentBet = 0;

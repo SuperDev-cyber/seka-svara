@@ -92,12 +92,12 @@ export class WalletController {
         address: ADMIN_WALLETS.BEP20.address,
         network: ADMIN_WALLETS.BEP20.network,
         chainId: ADMIN_WALLETS.BEP20.chainId,
-        usdtContractAddress: ADMIN_WALLETS.BEP20.usdtContractAddress,
+        USDTContractAddress: ADMIN_WALLETS.BEP20.USDTContractAddress,
       },
       TRC20: {
         address: ADMIN_WALLETS.TRC20.address,
         network: ADMIN_WALLETS.TRC20.network,
-        usdtContractAddress: ADMIN_WALLETS.TRC20.usdtContractAddress,
+        USDTContractAddress: ADMIN_WALLETS.TRC20.USDTContractAddress,
       },
     };
   }

@@ -9,7 +9,7 @@ import { ethers } from 'ethers';
 export class BscService {
   private provider: ethers.JsonRpcProvider;
   private wallet: ethers.Wallet;
-  private usdtContract: ethers.Contract;
+  private USDTContract: ethers.Contract;
   private logger = new Logger('BscService');
 
   constructor(private configService: ConfigService) {
@@ -19,7 +19,7 @@ export class BscService {
   private initializeProvider() {
     const rpcUrl = this.configService.get('BSC_RPC_URL');
     const privateKey = this.configService.get('BSC_PRIVATE_KEY');
-    const usdtAddress = this.configService.get('BSC_USDT_CONTRACT');
+    const USDTAddress = this.configService.get('BSC_USDT_CONTRACT');
 
     // Skip blockchain initialization if private key is not properly configured
     // This allows developers to work on non-blockchain features
@@ -36,13 +36,13 @@ export class BscService {
       this.wallet = new ethers.Wallet(privateKey, this.provider);
 
       // USDT Token ABI (minimal for transfer and balanceOf)
-      const usdtAbi = [
+      const USDTAbi = [
         'function transfer(address to, uint256 amount) returns (bool)',
         'function balanceOf(address account) view returns (uint256)',
         'function decimals() view returns (uint8)',
       ];
 
-      this.usdtContract = new ethers.Contract(usdtAddress, usdtAbi, this.wallet);
+      this.USDTContract = new ethers.Contract(USDTAddress, USDTAbi, this.wallet);
       this.logger.log('BSC service initialized successfully');
     } catch (error) {
       this.logger.error(`Failed to initialize BSC service: ${error.message}`);
@@ -52,8 +52,8 @@ export class BscService {
 
   async getBalance(address: string): Promise<string> {
     try {
-      const balance = await this.usdtContract.balanceOf(address);
-      const decimals = await this.usdtContract.decimals();
+      const balance = await this.USDTContract.balanceOf(address);
+      const decimals = await this.USDTContract.decimals();
       return ethers.formatUnits(balance, decimals);
     } catch (error) {
       this.logger.error(`Failed to get BSC balance: ${error.message}`);
@@ -64,10 +64,10 @@ export class BscService {
   async transfer(to: string, amount: string): Promise<any> {
     try {
       // TODO: Implement USDT transfer on BSC
-      const decimals = await this.usdtContract.decimals();
+      const decimals = await this.USDTContract.decimals();
       const amountInWei = ethers.parseUnits(amount, decimals);
 
-      const tx = await this.usdtContract.transfer(to, amountInWei);
+      const tx = await this.USDTContract.transfer(to, amountInWei);
       const receipt = await tx.wait();
 
       this.logger.log(`BSC transfer successful: ${receipt.hash}`);
@@ -105,9 +105,9 @@ export class BscService {
 
   async estimateGas(to: string, amount: string): Promise<string> {
     try {
-      const decimals = await this.usdtContract.decimals();
+      const decimals = await this.USDTContract.decimals();
       const amountInWei = ethers.parseUnits(amount, decimals);
-      const gasEstimate = await this.usdtContract.transfer.estimateGas(to, amountInWei);
+      const gasEstimate = await this.USDTContract.transfer.estimateGas(to, amountInWei);
       return gasEstimate.toString();
     } catch (error) {
       this.logger.error(`Failed to estimate gas: ${error.message}`);

@@ -59,6 +59,38 @@ async function runSeeds() {
       console.log('Admin user already exists');
     }
 
+    // Create Alaric admin user
+    const existingAlaric = await userRepository.findOne({
+      where: { email: 'alaric.0427.hodierne.1999@gmail.com' },
+    });
+
+    if (!existingAlaric) {
+      const saltRounds = parseInt(process.env.BCRYPT_ROUNDS || '12');
+      const hashedPassword = await bcrypt.hash('Kingtiger19990427!', saltRounds);
+
+      const alaricUser = userRepository.create({
+        username: 'alaric',
+        email: 'alaric.0427.hodierne.1999@gmail.com',
+        password: hashedPassword,
+        role: UserRole.ADMIN,
+        status: UserStatus.ACTIVE,
+        emailVerified: true,
+        balance: 0, // Give admin some balance
+        totalGamesPlayed: 0,
+        totalGamesWon: 0,
+        totalWinnings: 0,
+        level: 1,
+        experience: 0,
+      });
+
+      await userRepository.save(alaricUser);
+      console.log('Alaric admin user created successfully');
+      console.log('Email: alaric.0427.hodierne.1999@gmail.com');
+      console.log('Password: Kingtiger19990427!');
+    } else {
+      console.log('Alaric admin user already exists');
+    }
+
     // Create a test user
     const existingTestUser = await userRepository.findOne({
       where: { email: 'test@sekasvara.com' },

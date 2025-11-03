@@ -1,12 +1,21 @@
 import { Module, forwardRef } from '@nestjs/common';
+import { TypeOrmModule } from '@nestjs/typeorm';
 import { GameGateway } from './gateways/game.gateway';
 import { GameModule } from '../game/game.module';
 import { TablesModule } from '../tables/tables.module';
 import { WalletModule } from '../wallet/wallet.module';
 import { EmailModule } from '../email/email.module';
+import { User } from '../users/entities/user.entity';
+import { GameTable } from '../tables/entities/game-table.entity';
 
 @Module({
-  imports: [forwardRef(() => GameModule), TablesModule, WalletModule, EmailModule],
+  imports: [
+    TypeOrmModule.forFeature([User, GameTable]),
+    forwardRef(() => GameModule),
+    TablesModule,
+    WalletModule,
+    EmailModule,
+  ],
   providers: [GameGateway],
   exports: [GameGateway],
 })

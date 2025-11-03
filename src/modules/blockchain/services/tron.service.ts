@@ -8,7 +8,7 @@ const TronWeb = require('tronweb');
 @Injectable()
 export class TronService {
   private tronWeb: any;
-  private usdtContract: any;
+  private USDTContract: any;
   private logger = new Logger('TronService');
 
   constructor(private configService: ConfigService) {
@@ -20,7 +20,7 @@ export class TronService {
     const solidityNode = this.configService.get('TRON_SOLIDITY_NODE');
     const eventServer = this.configService.get('TRON_EVENT_SERVER');
     const privateKey = this.configService.get('TRON_PRIVATE_KEY');
-    const usdtAddress = this.configService.get('TRON_USDT_CONTRACT');
+    const USDTAddress = this.configService.get('TRON_USDT_CONTRACT');
 
     // Skip blockchain initialization if private key is not properly configured
     // This allows developers to work on non-blockchain features
@@ -39,7 +39,7 @@ export class TronService {
         privateKey: privateKey,
       });
 
-      this.usdtContract = await this.tronWeb.contract().at(usdtAddress);
+      this.USDTContract = await this.tronWeb.contract().at(USDTAddress);
       this.logger.log('Tron service initialized successfully');
     } catch (error) {
       this.logger.error(`Failed to initialize Tron service: ${error.message}`);
@@ -49,8 +49,8 @@ export class TronService {
 
   async getBalance(address: string): Promise<string> {
     try {
-      const balance = await this.usdtContract.balanceOf(address).call();
-      const decimals = await this.usdtContract.decimals().call();
+      const balance = await this.USDTContract.balanceOf(address).call();
+      const decimals = await this.USDTContract.decimals().call();
       return (balance / Math.pow(10, decimals)).toString();
     } catch (error) {
       this.logger.error(`Failed to get Tron balance: ${error.message}`);
@@ -61,10 +61,10 @@ export class TronService {
   async transfer(to: string, amount: string): Promise<any> {
     try {
       // TODO: Implement USDT transfer on Tron
-      const decimals = await this.usdtContract.decimals().call();
+      const decimals = await this.USDTContract.decimals().call();
       const amountInSun = parseFloat(amount) * Math.pow(10, decimals);
 
-      const tx = await this.usdtContract.transfer(to, amountInSun).send();
+      const tx = await this.USDTContract.transfer(to, amountInSun).send();
 
       this.logger.log(`Tron transfer successful: ${tx}`);
       return {

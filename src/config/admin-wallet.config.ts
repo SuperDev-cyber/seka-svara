@@ -16,8 +16,8 @@ export const ADMIN_WALLETS = {
     testnetChainId: 97, // BSC Testnet
     rpcUrl: 'https://bsc-dataseed.binance.org/',
     testnetRpcUrl: 'https://data-seed-prebsc-1-s1.binance.org:8545/',
-    usdtContractAddress: '0x55d398326f99059fF775485246999027B3197955', // USDT on BSC Mainnet
-    testnetUsdtContractAddress: '0x337610d27c682E347C9cD60BD4b3b107C9d34dDd', // USDT on BSC Testnet
+    USDTContractAddress: '0x55d398326f99059fF775485246999027B3197955', // USDT on BSC Mainnet
+    testnetUSDTContractAddress: '0x337610d27c682E347C9cD60BD4b3b107C9d34dDd', // USDT on BSC Testnet
   },
 
   // TRON Network (TRC20)
@@ -26,8 +26,8 @@ export const ADMIN_WALLETS = {
     network: 'TRON',
     rpcUrl: 'https://api.trongrid.io',
     testnetRpcUrl: 'https://api.shasta.trongrid.io',
-    usdtContractAddress: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t', // USDT on TRON Mainnet
-    testnetUsdtContractAddress: 'TG3XXyExBkPp9nzdajDZsozEu4BkaSJozs', // USDT on TRON Testnet (Shasta)
+    USDTContractAddress: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t', // USDT on TRON Mainnet
+    testnetUSDTContractAddress: 'TG3XXyExBkPp9nzdajDZsozEu4BkaSJozs', // USDT on TRON Testnet (Shasta)
   },
 };
 
@@ -45,16 +45,16 @@ export function getAdminWalletAddress(network: 'BEP20' | 'TRC20'): string {
 /**
  * Get USDT contract address for specific network
  */
-export function getUsdtContractAddress(network: 'BEP20' | 'TRC20', isTestnet: boolean = false): string {
+export function getUSDTContractAddress(network: 'BEP20' | 'TRC20', isTestnet: boolean = false): string {
   const wallet = ADMIN_WALLETS[network];
   if (!wallet) {
     throw new Error(`Unsupported network: ${network}`);
   }
   
   if (network === 'BEP20') {
-    return isTestnet ? wallet.testnetUsdtContractAddress : wallet.usdtContractAddress;
+    return isTestnet ? wallet.testnetUSDTContractAddress : wallet.USDTContractAddress;
   } else {
-    return isTestnet ? wallet.testnetUsdtContractAddress : wallet.usdtContractAddress;
+    return isTestnet ? wallet.testnetUSDTContractAddress : wallet.USDTContractAddress;
   }
 }
 

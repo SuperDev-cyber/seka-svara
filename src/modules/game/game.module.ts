@@ -13,11 +13,13 @@ import { Game } from './entities/game.entity';
 import { GamePlayer } from './entities/game-player.entity';
 import { User } from '../users/entities/user.entity';
 import { WebsocketModule } from '../websocket/websocket.module';
+import { UsersModule } from '../users/users.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Game, GamePlayer, User]),
     forwardRef(() => WebsocketModule),
+    UsersModule, // ✅ Import for PlatformBalanceService
   ],
   controllers: [GameController],
   providers: [

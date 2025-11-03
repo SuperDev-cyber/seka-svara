@@ -29,7 +29,7 @@ export class User {
   @Column({ type: 'enum', enum: UserStatus, default: UserStatus.ACTIVE })
   status: UserStatus;
 
-  @Column({ nullable: true })
+  @Column({ type: 'text', nullable: true })
   avatar: string;
 
   @Column({ type: 'boolean', default: false })
@@ -76,6 +76,9 @@ export class User {
 
   @Column({ type: 'decimal', precision: 18, scale: 8, default: 0 })
   points: number;
+
+  @Column({ type: 'decimal', precision: 18, scale: 0, default: 0 })
+  platformScore: number;
 
   @CreateDateColumn()
   createdAt: Date;

@@ -11,7 +11,7 @@ import "@openzeppelin/contracts/access/Ownable.sol";
  * Holds USDT until game winner is determined
  */
 contract GameEscrow is ReentrancyGuard, Ownable {
-    IERC20 public usdtToken;
+    IERC20 public USDTToken;
     
     struct Game {
         uint256 totalPot;
@@ -32,8 +32,8 @@ contract GameEscrow is ReentrancyGuard, Ownable {
     event GameCompleted(bytes32 indexed gameId, address winner, uint256 payout);
     event GameCancelled(bytes32 indexed gameId);
     
-    constructor(address _usdtToken, address _platformWallet) {
-        usdtToken = IERC20(_usdtToken);
+    constructor(address _USDTToken, address _platformWallet) {
+        USDTToken = IERC20(_USDTToken);
         platformWallet = _platformWallet;
     }
     
@@ -65,7 +65,7 @@ contract GameEscrow is ReentrancyGuard, Ownable {
         require(!game.isCompleted, "Game already completed");
         require(isPlayer(gameId, msg.sender), "Not a player in this game");
         
-        require(usdtToken.transferFrom(msg.sender, address(this), amount), "Transfer failed");
+        require(USDTToken.transferFrom(msg.sender, address(this), amount), "Transfer failed");
         
         game.deposits[msg.sender] += amount;
         game.totalPot += amount;
@@ -91,8 +91,8 @@ contract GameEscrow is ReentrancyGuard, Ownable {
         game.isCompleted = true;
         game.isActive = false;
         
-        require(usdtToken.transfer(platformWallet, platformFee), "Platform fee transfer failed");
-        require(usdtToken.transfer(winner, winnerPayout), "Winner payout failed");
+        require(USDTToken.transfer(platformWallet, platformFee), "Platform fee transfer failed");
+        require(USDTToken.transfer(winner, winnerPayout), "Winner payout failed");
         
         emit GameCompleted(gameId, winner, winnerPayout);
     }
@@ -112,7 +112,7 @@ contract GameEscrow is ReentrancyGuard, Ownable {
             
             if (depositAmount > 0) {
                 game.deposits[player] = 0;
-                require(usdtToken.transfer(player, depositAmount), "Refund failed");
+                require(USDTToken.transfer(player, depositAmount), "Refund failed");
             }
         }
         

@@ -9,12 +9,16 @@ import {
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 import { Logger, UseGuards, Injectable } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 import { GameService } from '../../game/game.service';
 import { GameEngine } from '../../game/services/game-engine.service';
 import { GameStateService } from '../../game/services/game-state.service';
 import { WalletService } from '../../wallet/wallet.service';
 import { EmailService } from '../../email/email.service';
 import { GameStatus } from '../../game/types/game-state.types';
+import { User } from '../../users/entities/user.entity';
+import { GameTable } from '../../tables/entities/game-table.entity';
 
 /**
  * WebSocket Gateway for real-time Seka Svara game communication
@@ -74,6 +78,8 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     gameId: string | null; // Database game ID when game starts
     lastWinnerId: string | null; // Previous winner (becomes dealer for next game)
     lastHeartbeat: Date; // For auto-termination when server dies
+    modalClosedPlayers?: Set<string>; // ✅ Track players who closed winner modal
+    restartGameTimer?: NodeJS.Timeout; // ✅ Timer for restarting game after all modals closed
   }>();
 
   // Timer for periodic cleanup of idle single-player tables
@@ -85,20 +91,27 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private readonly gameStateService: GameStateService,
     private readonly walletService: WalletService,
     private readonly emailService: EmailService,
+    @InjectRepository(User)
+    private readonly usersRepository: Repository<User>,
+    @InjectRepository(GameTable)
+    private readonly gameTablesRepository: Repository<GameTable>,
   ) {}
+
+  // ❌ REMOVED: Bot registration code (onModuleInit and addBotToOnlineUsers)
+  // Bots are no longer used in this system
 
   /**
    * Start periodic cleanup of idle single-player tables
-   * Runs every 2 minutes, deletes tables with 1 player idle for 10+ minutes
+   * Runs every 30 seconds, deletes tables with 1 player idle for 1+ minute
    */
   private startIdleTableCleanup() {
     if (this.cleanupInterval) return; // Already running
 
-    this.logger.log('🧹 Starting idle single-player table cleanup (checks every 2 minutes)');
+    this.logger.log('🧹 Starting idle single-player table cleanup (checks every 30 seconds)');
     
-    this.cleanupInterval = setInterval(() => {
+    this.cleanupInterval = setInterval(async () => {
       const now = new Date().getTime();
-      const TEN_MINUTES = 10 * 60 * 1000; // 10 minutes in milliseconds
+      const ONE_MINUTE = 1 * 60 * 1000; // 1 minute in milliseconds
       const HEARTBEAT_TIMEOUT = 30 * 1000; // 30 seconds for heartbeat timeout
       const tablesToDelete: string[] = [];
 
@@ -118,8 +131,8 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         if (table.players.length === 1 && table.singlePlayerSince) {
           const idleTime = now - table.singlePlayerSince.getTime();
           
-          if (idleTime >= TEN_MINUTES) {
-            this.logger.log(`⏱️ Table "${table.tableName}" has been idle with 1 player for ${Math.round(idleTime / 60000)} minutes`);
+          if (idleTime >= ONE_MINUTE) {
+            this.logger.log(`⏱️ Table "${table.tableName}" has been idle with 1 player for ${Math.round(idleTime / 1000)} seconds`);
             tablesToDelete.push(tableId);
           }
         }
@@ -131,6 +144,14 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         if (table) {
           this.activeTables.delete(tableId);
           this.logger.log(`🗑️ Auto-deleted idle single-player table: ${table.tableName} (ID: ${table.id})`);
+          
+          // ✅ DELETE FROM DATABASE (ALL tables)
+          try {
+            await this.gameTablesRepository.delete(tableId);
+            this.logger.log(`💾 ✅ Deleted table ${tableId} from database`);
+          } catch (error) {
+            this.logger.error(`❌ Failed to delete table from database: ${error.message}`);
+          }
           
           // Notify lobby
           this.server.to('lobby').emit('table_removed', {
@@ -147,7 +168,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
               this.server.to(socketId).emit('table_closed', {
                 tableId: table.id,
                 tableName: table.tableName,
-                reason: 'No other players joined within 10 minutes',
+                reason: 'No other players joined within 1 minute',
                 timestamp: new Date(),
               });
             }
@@ -158,7 +179,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       if (tablesToDelete.length > 0) {
         this.logger.log(`✅ Cleaned up ${tablesToDelete.length} idle single-player table(s)`);
       }
-    }, 2 * 60 * 1000); // Check every 2 minutes
+    }, 30 * 1000); // Check every 30 seconds
   }
 
   /**
@@ -214,13 +235,13 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       
       // DON'T auto-remove from tables on disconnect
       // This prevents issues when players navigate between pages (causes brief disconnect)
-      // Players are only removed via explicit 'leave_table' or by 10-minute idle cleanup
+      // Players are only removed via explicit 'leave_table' or by 1-minute idle cleanup
       
       // Just log which tables the user is still in
       for (const [tableId, table] of this.activeTables.entries()) {
         if (table.players.some(p => p.userId === userId)) {
           this.logger.log(`   📋 User ${userId} still in table: ${table.tableName} (${table.players.length}/${table.maxPlayers} players, status: ${table.status})`);
-          this.logger.log(`   ℹ️ Player will remain in table (use 'leave_table' to remove or wait for 10-min idle timeout)`);
+          this.logger.log(`   ℹ️ Player will remain in table (use 'leave_table' to remove or wait for 1-min idle timeout)`);
         }
       }
       
@@ -316,13 +337,13 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       timestamp: new Date(),
     });
       
-      // Send current game state to joining player
-      const gameState = this.gameEngine.getGameState(game);
-      client.emit('game_state_updated', gameState);
+      // Send current game state to joining player (sanitized - no cards visible yet)
+      const sanitizedState = await this.gameStateService.getSanitizedGameStateForUser(game, userId);
+      client.emit('game_state_updated', sanitizedState);
       
       return {
         success: true,
-        gameState,
+        gameState: sanitizedState,
       };
     } catch (error) {
       this.logger.error(`Error joining game: ${error.message}`);
@@ -399,18 +420,26 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       
       this.logger.log(`   Updated game state - Phase: ${gameState.phase}, Current player: ${gameState.currentPlayerId}`);
       
-      // Broadcast action to all players in table
+      // Broadcast action to all players in table WITH gameState for immediate UI update
       this.server.to(`table:${tableId}`).emit('player_action_broadcast', {
         tableId,
         gameId,
         userId,
         action,
         amount,
+        gameState: {
+          pot: gameState.pot,
+          currentBet: gameState.currentBet,
+          currentPlayerId: gameState.currentPlayerId,
+          phase: gameState.phase,
+          players: gameState.players, // Include updated player data
+          cardViewers: game.cardViewers || [], // ✅ FIX: Include cardViewers to maintain badge visibility
+        },
         timestamp: new Date(),
       });
       
-      // Broadcast updated game state
-      this.server.to(`table:${tableId}`).emit('game_state_updated', gameState);
+      // 🔒 SECURE: Broadcast sanitized game state to each player
+      await this.broadcastSanitizedGameState(game, tableId);
       
       // Check if game reached showdown
       if (gameState.phase === 'showdown' || gameState.phase === 'completed') {
@@ -420,6 +449,16 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         // Mark table as finished
         if (gameState.phase === 'completed') {
           table.status = 'finished';
+          
+          // ✅ UPDATE DATABASE status to 'finished' (ALL tables)
+          try {
+            await this.gameTablesRepository.update(tableId, {
+              status: 'finished',
+            });
+            this.logger.log(`💾 ✅ Database updated: Table ${tableId} status changed to 'finished'`);
+          } catch (error) {
+            this.logger.error(`❌ Failed to update table status in database: ${error.message}`);
+          }
         }
       }
       
@@ -518,13 +557,25 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @MessageBody() data: { gameId: string },
   ) {
     try {
-      const gameState = await this.gameService.getGameState(data.gameId);
+      // Get requesting user ID from socket
+      const userId = this.connectedPlayers.get(client.id);
+      if (!userId) {
+        return {
+          success: false,
+          error: 'User not authenticated',
+        };
+      }
       
-      client.emit('game_state_updated', gameState);
+      // Get game from database
+      const game = await this.gameService.findOne(data.gameId);
+      
+      // Send sanitized game state (only includes requester's cards if they've viewed them)
+      const sanitizedState = await this.gameStateService.getSanitizedGameStateForUser(game, userId);
+      client.emit('game_state_updated', sanitizedState);
       
       return {
         success: true,
-        gameState,
+        gameState: sanitizedState,
       };
     } catch (error) {
       return {
@@ -532,6 +583,86 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         error: error.message,
       };
     }
+  }
+
+  /**
+   * ✅ Handle player closing winner modal
+   * Once ALL players close, wait 10 seconds and restart the game
+   */
+  @SubscribeMessage('player_modal_closed')
+  async handlePlayerModalClosed(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { tableId: string; userId: string },
+  ) {
+    const { tableId, userId } = data;
+    
+    this.logger.log(`🎯 Player ${userId} closed winner modal in table ${tableId}`);
+    
+    const table = this.activeTables.get(tableId);
+    if (!table) {
+      return { success: false, error: 'Table not found' };
+    }
+    
+    // Initialize tracking set if not exists
+    if (!table.modalClosedPlayers) {
+      table.modalClosedPlayers = new Set<string>();
+    }
+    
+    // Add player to set of closed modals
+    table.modalClosedPlayers.add(userId);
+    
+    this.logger.log(`   ${table.modalClosedPlayers.size}/${table.players.length} players closed modal`);
+    
+    // Check if ALL players have closed the modal
+    const allPlayersClosed = table.players.every(p => table.modalClosedPlayers?.has(p.userId));
+    
+    if (allPlayersClosed) {
+      this.logger.log(`✅ ALL PLAYERS CLOSED MODAL - Starting 10s countdown for table ${tableId}`);
+      
+      // Clear any existing restart timer
+      if (table.restartGameTimer) {
+        clearTimeout(table.restartGameTimer);
+      }
+      
+      // Broadcast countdown to all players
+      this.server.to(`table:${tableId}`).emit('game_restart_countdown', {
+        tableId,
+        secondsRemaining: 10,
+        message: 'Next game starting in 10 seconds...',
+        timestamp: new Date(),
+      });
+      
+      // Start 10-second countdown
+      let countdown = 10;
+      const countdownInterval = setInterval(() => {
+        countdown--;
+        if (countdown > 0) {
+          this.server.to(`table:${tableId}`).emit('game_restart_countdown', {
+            tableId,
+            secondsRemaining: countdown,
+            message: `Next game starting in ${countdown} second${countdown === 1 ? '' : 's'}...`,
+            timestamp: new Date(),
+          });
+        }
+      }, 1000);
+      
+      // After 10 seconds, restart the game
+      table.restartGameTimer = setTimeout(async () => {
+        clearInterval(countdownInterval);
+        
+        this.logger.log(`🔄 RESTARTING GAME for table ${tableId}`);
+        
+        // Reset modal tracking
+        table.modalClosedPlayers = new Set<string>();
+        
+        // Check if all players still have sufficient balance
+        // This will remove players with insufficient balance and restart if enough players remain
+        await this.checkAndRemoveInsufficientPlayers(tableId);
+        
+      }, 10000);
+    }
+    
+    return { success: true, allClosed: allPlayersClosed };
   }
 
   /**
@@ -710,12 +841,13 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
    * Create table (IN-MEMORY ONLY)
    */
   @SubscribeMessage('create_table')
-  handleCreateTable(
+  async handleCreateTable(
     @ConnectedSocket() client: Socket,
     @MessageBody() data: {
       tableName: string;
       entryFee: number;
       maxPlayers?: number; // Optional, will be forced to 6
+      privacy?: string; // 'public' or 'private'
       creatorId: string;
       creatorEmail: string;
       creatorUsername?: string;
@@ -731,17 +863,34 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     // FORCE maxPlayers to 6 (all tables are 6-player)
     const maxPlayers = 6;
     
+    // ✅ FIX: Fetch creator's platformScore from database to set initial balance
+    let creatorBalance = 0;
+    try {
+      const userRecord = await this.usersRepository.findOne({ where: { id: data.creatorId } });
+      if (userRecord && userRecord.platformScore !== null && userRecord.platformScore !== undefined) {
+        creatorBalance = Math.round(Number(userRecord.platformScore));
+        this.logger.log(`💰 Fetched creator platformScore for ${data.creatorEmail}: ${creatorBalance} SEKA`);
+      } else {
+        this.logger.warn(`⚠️ No platformScore found for creator ${data.creatorEmail}, defaulting to 0`);
+      }
+    } catch (error) {
+      this.logger.error(`❌ Error fetching creator platformScore: ${error.message}`);
+    }
+    
     // Automatically add creator to the table
     const creatorPlayer = {
       userId: data.creatorId,
       email: data.creatorEmail,
       username: data.creatorUsername || data.creatorEmail?.split('@')[0] || 'Player',
       avatar: data.creatorAvatar,
-      balance: 1000, // Will be updated when game starts
+      balance: creatorBalance, // ✅ Set from platformScore
       isActive: true,
       joinedAt: new Date(),
       socketId: client.id,
     };
+    
+    // ✅ Determine privacy setting
+    const isPrivate = data.privacy === 'private';
     
     // Create table in memory with creator already joined
     const newTable = {
@@ -751,15 +900,44 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       maxPlayers: maxPlayers, // Always 6
       players: [creatorPlayer], // Creator automatically joins
       status: 'waiting' as const,
+      privacy: data.privacy || 'public', // 'public' or 'private'
+      isPrivate: isPrivate, // Boolean for easy checks
+      invitedPlayers: [] as string[], // Array of invited user IDs
       creatorId: data.creatorId,
       createdAt: new Date(),
-      singlePlayerSince: null, // Track for 10-minute idle timeout
+      singlePlayerSince: null, // Track for 1-minute idle timeout
       gameId: null as string | null, // Database game ID when game starts
       lastWinnerId: null as string | null, // Previous winner (becomes dealer)
       lastHeartbeat: new Date() // For auto-termination when server dies
     };
     
     this.activeTables.set(tableId, newTable);
+    
+    // ✅ SAVE ALL TABLES TO DATABASE IMMEDIATELY (including pending tables)
+    const dbTable = this.gameTablesRepository.create({
+      id: tableId,
+      name: data.tableName,
+      creatorId: data.creatorId,
+      status: 'waiting', // Initial status
+      network: 'BEP20', // Default network
+      buyInAmount: data.entryFee,
+      minBet: data.entryFee,
+      maxBet: data.entryFee * 10,
+      minPlayers: 2,
+      maxPlayers: 6,
+      currentPlayers: 1, // Creator already joined
+      isPrivate: isPrivate, // ✅ Use privacy setting from frontend
+      platformFee: 5,
+    });
+    
+    (async () => {
+      try {
+        await this.gameTablesRepository.save(dbTable);
+        this.logger.log(`💾 ✅ Table saved to database: ${tableId} (status: waiting)`);
+      } catch (error) {
+        this.logger.error(`❌ Failed to save table to database: ${error.message}`);
+      }
+    })();
     
     // Map user to socket for game events
     this.userSockets.set(data.creatorId, client.id);
@@ -769,19 +947,10 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     client.join(gameRoom);
     
     this.logger.log(`✅ Table stored in memory: ${data.tableName} (${tableId}) - 6 players max`);
+    this.logger.log(`   Privacy: ${isPrivate ? 'PRIVATE' : 'PUBLIC'}`);
     this.logger.log(`   Creator ${data.creatorEmail} automatically joined the table`);
     this.logger.log(`   Total tables in memory: ${this.activeTables.size}`);
     this.logger.log(`   Online users in lobby: ${this.onlineUsers.size}`);
-    
-    // Get all clients in lobby room
-    const lobbyRoom = this.server.sockets.adapter.rooms.get('lobby');
-    this.logger.log(`   Clients in 'lobby' room: ${lobbyRoom ? lobbyRoom.size : 0}`);
-    
-    // Log all socket IDs in lobby
-    if (lobbyRoom) {
-      const lobbySocketIds = Array.from(lobbyRoom);
-      this.logger.log(`   Lobby Socket IDs: ${lobbySocketIds.join(', ')}`);
-    }
     
     // Create table broadcast payload
     const tableCreatedPayload = {
@@ -791,23 +960,40 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       currentPlayers: 1, // Creator is already in
       maxPlayers: maxPlayers, // Always 6
       status: 'waiting',
+      privacy: data.privacy || 'public',
+      isPrivate: isPrivate,
       creatorId: data.creatorId,
       creatorEmail: data.creatorEmail,
       timestamp: new Date(),
     };
     
-    // Broadcast to ALL users in lobby (including creator)
-    this.server.to('lobby').emit('table_created', tableCreatedPayload);
-    
-    this.logger.log(`📡 Broadcasted 'table_created' to lobby room (${lobbyRoom ? lobbyRoom.size : 0} clients)`);
-    this.logger.log(`   Table data: ${JSON.stringify({ id: tableId, name: data.tableName, entryFee: data.entryFee, players: 1 })}`);
-    
-    // Also broadcast to all connected sockets (as backup)
-    this.server.emit('table_created', tableCreatedPayload);
-    this.logger.log(`📡 Also broadcasted to ALL connected sockets`);
-    
-    // Emit to creator directly to ensure they get it
-    client.emit('table_created', tableCreatedPayload);
+    // ✅ PRIVATE TABLE: Only notify the creator, NOT the lobby
+    if (isPrivate) {
+      this.logger.log(`🔒 PRIVATE table created - NOT broadcasting to lobby`);
+      this.logger.log(`   Only creator will see this table`);
+      
+      // Emit only to creator directly
+      client.emit('table_created', tableCreatedPayload);
+      this.logger.log(`📡 Sent 'table_created' to creator only: ${data.creatorEmail}`);
+    } 
+    // ✅ PUBLIC TABLE: Broadcast to everyone in lobby
+    else {
+      const lobbyRoom = this.server.sockets.adapter.rooms.get('lobby');
+      this.logger.log(`   Clients in 'lobby' room: ${lobbyRoom ? lobbyRoom.size : 0}`);
+      
+      // Broadcast to ALL users in lobby
+      this.server.to('lobby').emit('table_created', tableCreatedPayload);
+      
+      this.logger.log(`📡 Broadcasted 'table_created' to lobby room (${lobbyRoom ? lobbyRoom.size : 0} clients)`);
+      this.logger.log(`   Table data: ${JSON.stringify({ id: tableId, name: data.tableName, entryFee: data.entryFee, players: 1 })}`);
+      
+      // Also broadcast to all connected sockets (as backup)
+      this.server.emit('table_created', tableCreatedPayload);
+      this.logger.log(`📡 Also broadcasted to ALL connected sockets`);
+      
+      // Emit to creator directly to ensure they get it
+      client.emit('table_created', tableCreatedPayload);
+    }
     
     return {
       success: true,
@@ -821,8 +1007,13 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
    * Also cleans up stale empty tables
    */
   @SubscribeMessage('get_active_tables')
-  handleGetActiveTables(@ConnectedSocket() client: Socket) {
+  handleGetActiveTables(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data?: { userId?: string },
+  ) {
+    const requestingUserId = data?.userId;
     this.logger.log(`📋 GET_ACTIVE_TABLES request from client ${client.id}`);
+    this.logger.log(`   Requesting User ID: ${requestingUserId || 'anonymous'}`);
     this.logger.log(`   Total tables in memory: ${this.activeTables.size}`);
     
     // Debug: Log all table IDs
@@ -860,15 +1051,43 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       });
     }
     
-    const tables = Array.from(this.activeTables.values()).map(table => ({
-      id: table.id,
-      tableName: table.tableName,
-      entryFee: table.entryFee,
-      currentPlayers: table.players.length,
-      maxPlayers: table.maxPlayers,
-      status: table.status,
-      creatorId: table.creatorId,
-    }));
+    // ✅ Filter tables based on privacy:
+    // - PUBLIC tables: visible to everyone
+    // - PRIVATE tables: only visible to creator and invited players
+    const tables = Array.from(this.activeTables.values())
+      .filter((table: any) => {
+        // Public tables are always visible
+        if (!table.isPrivate) {
+          return true;
+        }
+        
+        // Private tables: only show if user is creator or invited
+        if (requestingUserId) {
+          const isCreator = table.creatorId === requestingUserId;
+          const isInvited = table.invitedPlayers?.includes(requestingUserId);
+          const isAlreadyInTable = table.players.some(p => p.userId === requestingUserId);
+          
+          if (isCreator || isInvited || isAlreadyInTable) {
+            this.logger.log(`   🔒 Including private table "${table.tableName}" for user ${requestingUserId}`);
+            return true;
+          }
+        }
+        
+        // Hide private table from this user
+        this.logger.log(`   🔒 Hiding private table "${table.tableName}" from user`);
+        return false;
+      })
+      .map((table: any) => ({
+        id: table.id,
+        tableName: table.tableName,
+        entryFee: table.entryFee,
+        currentPlayers: table.players.length,
+        maxPlayers: table.maxPlayers,
+        status: table.status,
+        privacy: table.privacy,
+        isPrivate: table.isPrivate,
+        creatorId: table.creatorId,
+      }));
     
     this.logger.log(`   Returning ${tables.length} tables to client`);
     if (tables.length > 0) {
@@ -885,7 +1104,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
    * Get specific table details (IN-MEMORY)
    */
   @SubscribeMessage('get_table_details')
-  handleGetTableDetails(
+  async handleGetTableDetails(
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { tableId: string },
   ) {
@@ -919,11 +1138,25 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         currentPlayers: table.players.length,
         status: table.status,
         creatorId: table.creatorId,
-        players: table.players.map((p, index) => ({
+        players: await Promise.all(table.players.map(async (p, index) => {
+          // Fetch real platformScore from database
+          try {
+            const user = await this.usersRepository.findOne({ where: { id: p.userId } });
+            return {
           userId: p.userId,
           email: p.email,
           position: index,
-          balance: 1000, // Default balance
+              balance: user?.platformScore || 0, // Dynamic Sekasvara Score from database
+            };
+          } catch (error) {
+            this.logger.warn(`Failed to fetch balance for user ${p.userId}, using 0`);
+            return {
+              userId: p.userId,
+              email: p.email,
+              position: index,
+              balance: 0,
+            };
+          }
         })),
       },
     };
@@ -937,6 +1170,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { tableId: string; userId: string },
   ) {
+    console.log('@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@', data.userId);
     this.logger.log(`👁️ Player ${data.userId} wants to view their cards in table ${data.tableId}`);
     
     const table = this.activeTables.get(data.tableId);
@@ -946,15 +1180,62 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     
     try {
       const game = await this.gameService.findOne(table.gameId);
-      await this.gameStateService.playerViewCards(game, data.userId);
+      const player = game.players.find(p => p.userId === data.userId);
+      
+      if (!player) {
+        return { success: false, message: 'Player not found in game' };
+      }
+      
+      if (player.hasSeenCards) {
+        return { success: false, message: 'You have already seen your cards' };
+      }
+      
+      // Mark player as having seen their cards
+      player.hasSeenCards = true;
+      
+      // ✅ NEW: Track in database - Add to cardViewers array
+      if (!game.cardViewers) {
+        game.cardViewers = [];
+      }
+      if (!game.cardViewers.includes(data.userId)) {
+        game.cardViewers.push(data.userId);
+        this.logger.log(`📊 Added ${data.userId} to cardViewers array. Total viewers: ${game.cardViewers.length}`);
+      }
+      
+      await this.gameService.saveGame(game);
       
       this.logger.log(`👁️ Player ${data.userId} has SEEN their cards (no longer blind)`);
+      this.logger.log(`   🎴 Cards: ${JSON.stringify(player.hand)}`);
+      this.logger.log(`   🎯 Score: ${player.handScore} - ${player.handDescription}`);
+      this.logger.log(`   📋 CardViewers in DB: ${JSON.stringify(game.cardViewers)}`);
       
-      // Broadcast updated game state
-      const gameState = await this.gameEngine.getGameState(game);
-      this.server.to(`table:${data.tableId}`).emit('game_state_updated', gameState);
+      // ✅ Broadcast player_seen_cards event to ALL players in table
+      // This notifies all clients that this player has viewed their cards
+      const gameStateForBroadcast = await this.gameStateService.getSanitizedGameStateForUser(game, data.userId);
+      this.server.to(`table:${data.tableId}`).emit('player_seen_cards', {
+        userId: data.userId,
+        gameState: gameStateForBroadcast,
+        timestamp: new Date(),
+      });
       
-      return { success: true, message: 'Cards viewed successfully' };
+      this.logger.log(`📢 Broadcasted player_seen_cards event for ${data.userId}`);
+      
+      // 🔒 SECURE: Broadcast sanitized game state to each player
+      // Each player only sees their own cards (if they've viewed them)
+      await this.broadcastSanitizedGameState(game, data.tableId);
+      
+      // ✅ ONLY send card details to the requesting player (no broadcast)
+      // This prevents other players' screens from flipping
+      const sanitizedState = await this.gameStateService.getSanitizedGameStateForUser(game, data.userId);
+      
+      return { 
+        success: true, 
+        message: 'Cards viewed successfully',
+        hand: player.hand,
+        handScore: player.handScore,
+        handDescription: player.handDescription,
+        gameState: sanitizedState, // Include sanitized game state for client
+      };
     } catch (error) {
       this.logger.error(`❌ Error viewing cards: ${error.message}`);
       return { success: false, message: 'Failed to view cards' };
@@ -974,27 +1255,83 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       amount?: number;
     },
   ) {
-    this.logger.log(`🎲 Player ${data.userId} playing blind: ${data.action} in table ${data.tableId}`);
+    this.logger.log(`🎲 Player ${data.userId} playing blind: ${data.action} (amount: ${data.amount}) in table ${data.tableId}`);
     
     const table = this.activeTables.get(data.tableId);
     if (!table || !table.gameId) {
+      this.logger.error(`❌ Table or game not found for blind action`);
       return { success: false, message: 'Table or game not found' };
     }
     
     try {
       const game = await this.gameService.findOne(table.gameId);
-      await this.gameStateService.playerPlayBlind(game, data.userId, data.action, data.amount);
       
-      this.logger.log(`🎲 Player ${data.userId} played blind: ${data.action}`);
+      // Check if player is in the game
+      const player = game.players.find(p => p.userId === data.userId);
+      if (!player) {
+        this.logger.error(`❌ Player ${data.userId} not found in game`);
+        return { success: false, message: 'You are not in this game' };
+      }
       
-      // Broadcast updated game state
-      const gameState = await this.gameEngine.getGameState(game);
-      this.server.to(`table:${data.tableId}`).emit('game_state_updated', gameState);
+      // Check if it's player's turn
+      if (game.state.currentPlayerId !== data.userId) {
+        this.logger.error(`❌ Not player ${data.userId}'s turn. Current turn: ${game.state.currentPlayerId}`);
+        return { success: false, message: 'It is not your turn' };
+      }
+      
+      // Mark player as playing blind (not seeing cards)
+      if (!player.hasSeenCards) {
+        this.logger.log(`👁️ Player ${data.userId} is playing blind (hasn't seen cards)`);
+        
+        // ✅ NEW: Track in database - Add to blindPlayers object
+        if (!game.blindPlayers) {
+          game.blindPlayers = {};
+        }
+        if (!game.blindPlayers[data.userId]) {
+          game.blindPlayers[data.userId] = { count: 0, totalAmount: 0 };
+        }
+        game.blindPlayers[data.userId].count += 1;
+        game.blindPlayers[data.userId].totalAmount += (data.amount || 0);
+        
+        this.logger.log(`📊 Blind bet tracked for ${data.userId}:`);
+        this.logger.log(`   Blind count: ${game.blindPlayers[data.userId].count}`);
+        this.logger.log(`   Total blind amount: ${game.blindPlayers[data.userId].totalAmount}`);
+      }
+      
+      // Validate and cast action to BettingAction enum
+      const validActions = ['check', 'bet', 'call', 'raise', 'fold', 'all_in'];
+      if (!validActions.includes(data.action)) {
+        this.logger.error(`❌ Invalid action: ${data.action}`);
+        return { success: false, message: `Invalid action: ${data.action}` };
+      }
+      
+      // 🎲 BLIND BETTING RULE: When playing blind, next player must bet 2x the pot
+      const currentPot = game.state.pot;
+      const wasBlind = !player.hasSeenCards;
+      
+      this.logger.log(`🎲 BLIND BETTING: Current pot = ${currentPot}, Player is ${wasBlind ? 'BLIND' : 'SEEING'}`);
+      
+      // Process the blind action as a regular betting action
+      await this.gameEngine.processPlayerAction(game, data.userId, data.action as any, data.amount);
+      
+      // ✅ APPLY BLIND BETTING RULE: Set minimum bet for next player to 2x pot
+      if (wasBlind && data.action !== 'fold') {
+        const blindMinimumBet = currentPot * 2;
+        game.state.currentBet = Math.max(game.state.currentBet, blindMinimumBet);
+        await this.gameService.saveGame(game);
+        
+        this.logger.log(`🎲 BLIND BETTING RULE APPLIED: Next player must bet at least ${blindMinimumBet} (2x ${currentPot})`);
+      }
+      
+      this.logger.log(`✅ Player ${data.userId} played blind: ${data.action} ${data.amount || ''}`);
+      
+      // 🔒 SECURE: Broadcast sanitized game state to each player
+      await this.broadcastSanitizedGameState(game, data.tableId);
       
       return { success: true, message: 'Blind action processed' };
     } catch (error) {
-      this.logger.error(`❌ Error playing blind: ${error.message}`);
-      return { success: false, message: 'Failed to process blind action' };
+      this.logger.error(`❌ Error playing blind: ${error.message}`, error.stack);
+      return { success: false, message: error.message || 'Failed to process blind action' };
     }
   }
 
@@ -1023,6 +1360,59 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   /**
+   * ✅ Force showdown when all players have called
+   * This is triggered by the frontend when it detects all active players have called
+   */
+  @SubscribeMessage('force_showdown')
+  async handleForceShowdown(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { tableId: string; reason?: string },
+  ) {
+    this.logger.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    this.logger.log('🎯 FORCE SHOWDOWN REQUEST');
+    this.logger.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    this.logger.log(`   Table ID: ${data.tableId}`);
+    this.logger.log(`   Reason: ${data.reason || 'Frontend detected all players called'}`);
+    
+    try {
+      const table = this.activeTables.get(data.tableId);
+      if (!table) {
+        this.logger.warn(`❌ Table ${data.tableId} not found`);
+        return { success: false, message: 'Table not found' };
+      }
+      
+      if (!table.gameId) {
+        this.logger.warn(`❌ No active game in table ${data.tableId}`);
+        return { success: false, message: 'No active game' };
+      }
+      
+      const game = await this.gameService.findOne(table.gameId);
+      if (!game) {
+        this.logger.warn(`❌ Game ${table.gameId} not found`);
+        return { success: false, message: 'Game not found' };
+      }
+      
+      this.logger.log('✅ Requesting game engine to execute showdown...');
+      
+      // Force the game engine to execute showdown
+      await this.gameEngine.executeShowdown(game);
+      
+      this.logger.log('✅ Showdown executed - broadcasting results...');
+      
+      // Broadcast showdown results to all players
+      await this.broadcastShowdown(data.tableId, table.gameId);
+      
+      this.logger.log('✅ Force showdown complete');
+      this.logger.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+      
+      return { success: true, message: 'Showdown executed' };
+    } catch (error) {
+      this.logger.error(`❌ Error forcing showdown: ${error.message}`, error.stack);
+      return { success: false, message: error.message };
+    }
+  }
+
+  /**
    * Get online users for the lobby
    */
   @SubscribeMessage('get_online_users')
@@ -1030,31 +1420,41 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
   ) {
     this.logger.log(`👥 GET_ONLINE_USERS request from client ${client.id}`);
+    this.logger.log(`   Total in onlineUsers set: ${this.onlineUsers.size}`);
     
-    // Get all online users from the lobby
+    // Get all online users from the lobby (including bots!)
     const onlineUsers = Array.from(this.onlineUsers).map(userId => {
       const userData = this.userData.get(userId);
+      const isBot = userData?.email?.includes('@bot.ai') || false;
+      
       return {
         userId: userId,
         email: userData?.email || '',
         username: userData?.username || userData?.email?.split('@')[0] || 'Player',
         avatar: userData?.avatar || null,
         isOnline: true,
+        isBot, // ✅ Mark bots so frontend can show indicator
         lastSeen: new Date().toISOString()
       };
     });
     
-    this.logger.log(`   Returning ${onlineUsers.length} online users`);
+    const botCount = onlineUsers.filter(u => u.isBot).length;
+    const humanCount = onlineUsers.length - botCount;
+    
+    this.logger.log(`   📊 Returning ${onlineUsers.length} online users (${humanCount} humans, ${botCount} bots)`);
     
     return {
       success: true,
       onlineUsers,
-      totalOnline: onlineUsers.length
+      totalOnline: onlineUsers.length,
+      humanCount,
+      botCount,
     };
   }
 
   /**
    * Send game invitation to another user
+   * ✅ NEW: Support pending invites (table created on accept)
    */
   @SubscribeMessage('send_game_invitation')
   async handleSendGameInvitation(
@@ -1062,9 +1462,11 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @MessageBody() data: {
       targetUserId: string;
       tableName: string;
-      tableId: string;
+      tableId?: string; // ✅ Optional now
       entryFee: number;
-      gameUrl: string;
+      gameUrl?: string;
+      pending?: boolean; // ✅ New: marks invitation as pending (table created on accept)
+      tableSettings?: any; // ✅ New: settings for creating table on accept
     }
   ) {
     const inviterUserId = this.connectedPlayers.get(client.id);
@@ -1077,17 +1479,59 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const targetUserSocketId = this.userSockets.get(data.targetUserId);
 
     this.logger.log(`🎯 Game invitation from ${inviterUserId} to ${data.targetUserId}`);
+    this.logger.log(`   Pending: ${data.pending ? 'YES (table will be created on accept)' : 'NO (table already exists)'}`);
+
+    // ❌ REMOVED: Bot auto-accept code - Bots are no longer used
 
     const invitationData = {
       inviterId: inviterUserId,
       inviterName: inviterData?.username || inviterData?.email?.split('@')[0] || 'Anonymous',
       inviterEmail: inviterData?.email,
       tableName: data.tableName,
-      tableId: data.tableId,
+      tableId: data.tableId, // May be undefined for pending invites
       entryFee: data.entryFee,
       gameUrl: data.gameUrl,
+      pending: data.pending || false,
+      tableSettings: data.tableSettings, // For creating table on accept
       timestamp: new Date().toISOString()
     };
+
+    // ✅ Add invited player to table's invitedPlayers array (ONLY if table already exists)
+    if (data.tableId && !data.pending) {
+      const table: any = this.activeTables.get(data.tableId);
+      if (table) {
+        if (!table.invitedPlayers) {
+          table.invitedPlayers = [];
+        }
+        
+        // Add to invited players if not already there
+        if (!table.invitedPlayers.includes(data.targetUserId)) {
+          table.invitedPlayers.push(data.targetUserId);
+          this.logger.log(`✅ Added ${data.targetUserId} to invited players for table ${data.tableId}`);
+          
+          // If this is a private table, send table_created event to the invited player
+          if (table.isPrivate && targetUserSocketId) {
+            const tableCreatedPayload = {
+              id: table.id,
+              tableName: table.tableName,
+              entryFee: table.entryFee,
+              currentPlayers: table.players.length,
+              maxPlayers: table.maxPlayers,
+              status: table.status,
+              privacy: table.privacy,
+              isPrivate: table.isPrivate,
+              creatorId: table.creatorId,
+              timestamp: new Date(),
+            };
+            
+            this.server.to(targetUserSocketId).emit('table_created', tableCreatedPayload);
+            this.logger.log(`📡 Sent private table visibility to invited player ${data.targetUserId}`);
+          }
+        }
+      }
+    } else if (data.pending) {
+      this.logger.log(`📋 Pending invitation - table will be created when ${data.targetUserId} accepts`);
+    }
 
     // Check if target user is online and verify socket is still connected
     if (targetUserSocketId && this.onlineUsers.has(data.targetUserId)) {
@@ -1101,6 +1545,13 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         
         // Fall back to email
         this.logger.log(`📧 Falling back to email for ${data.targetUserId}`);
+        
+        // ✅ Skip email for pending invites (no gameUrl yet)
+        if (data.pending) {
+          this.logger.log(`⏭️ Skipping email for pending invite (table will be created on accept)`);
+          return;
+        }
+        
         try {
           // Get target user data from the userData map
           const targetUserData = this.userData.get(data.targetUserId);
@@ -1109,7 +1560,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
             inviterData?.username || inviterData?.email?.split('@')[0] || 'Anonymous',
             data.tableName,
             data.entryFee,
-            data.gameUrl
+            data.gameUrl || ''
           );
           
           client.emit('invitation_sent', {
@@ -1131,10 +1582,24 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       }
       
       // Send real-time notification
-      this.logger.log(`📱 Sending real-time notification to ${data.targetUserId} (socket: ${targetUserSocketId})`);
-      this.logger.log(`📱 Current userSockets map for ${data.targetUserId}:`, this.userSockets.get(data.targetUserId));
-      this.logger.log(`📱 Invitation data:`, JSON.stringify(invitationData, null, 2));
+      console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+      console.log('📤 SENDING GAME INVITATION VIA SOCKET.IO');
+      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+      console.log(`📨 FROM:`, inviterData?.username || inviterData?.email || inviterUserId);
+      console.log(`📨 TO:`, data.targetUserId);
+      console.log(`📨 TO Socket ID:`, targetUserSocketId);
+      console.log(`📨 Table:`, data.tableName);
+      console.log(`📨 Entry Fee:`, data.entryFee, 'SEKA');
+      console.log(`📨 Table ID:`, data.tableId);
+      console.log(`📨 Game URL:`, data.gameUrl);
+      console.log(`📨 Event Name:`, 'game_invitation');
+      console.log(`📨 Data:`, JSON.stringify(invitationData, null, 2));
+      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+      
       this.server.to(targetUserSocketId).emit('game_invitation', invitationData);
+      
+      console.log('✅ Socket.IO emit() called successfully!');
+      console.log('📡 Invitation should now be in transit to recipient...\n');
       
       // Confirm to sender
       client.emit('invitation_sent', {
@@ -1146,13 +1611,25 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       // User is offline, send email
       this.logger.log(`📧 User ${data.targetUserId} is offline, sending email`);
       
+      // ✅ Skip email for pending invites (no gameUrl yet)
+      if (data.pending) {
+        this.logger.log(`⏭️ Skipping email for pending invite (table will be created on accept)`);
+        client.emit('invitation_sent', {
+          success: false,
+          method: 'none',
+          error: 'User offline and pending invite (no email sent)',
+          targetUserId: data.targetUserId
+        });
+        return;
+      }
+      
       // Send email invitation using injected EmailService
       this.emailService.sendGameInvitation(
         invitationData.inviterEmail || 'unknown@example.com',
         invitationData.inviterName,
         invitationData.tableName,
         invitationData.entryFee,
-        invitationData.gameUrl
+        invitationData.gameUrl || ''
       ).then(() => {
         client.emit('invitation_sent', {
           success: true,
@@ -1223,7 +1700,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
    * Join table (IN-MEMORY) - Allows rejoining if previously left
    */
   @SubscribeMessage('join_table')
-  handleJoinTable(
+  async handleJoinTable(
     @ConnectedSocket() client: Socket,
     @MessageBody() data: {
       tableId: string;
@@ -1264,6 +1741,32 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       
       this.activeTables.set(data.tableId, newTable);
       table = newTable;
+      
+      // ✅ SAVE PENDING TABLE TO DATABASE IMMEDIATELY
+      const dbTable = this.gameTablesRepository.create({
+        id: data.tableId,
+        name: newTable.tableName,
+        creatorId: data.userId,
+        status: 'waiting', // Initial status
+        network: 'BEP20',
+        buyInAmount: newTable.entryFee,
+        minBet: newTable.entryFee,
+        maxBet: newTable.entryFee * 10,
+        minPlayers: 2,
+        maxPlayers: 6,
+        currentPlayers: 1,
+        isPrivate: false,
+        platformFee: 5,
+      });
+      
+      (async () => {
+        try {
+          await this.gameTablesRepository.save(dbTable);
+          this.logger.log(`💾 ✅ Pending table saved to database: ${data.tableId} (status: waiting)`);
+        } catch (error) {
+          this.logger.error(`❌ Failed to save pending table to database: ${error.message}`);
+        }
+      })();
       
       // Map user socket
       this.userSockets.set(data.userId, client.id);
@@ -1317,6 +1820,11 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       if (data.username) existingPlayer.username = data.username;
       if (data.avatar) existingPlayer.avatar = data.avatar;
       
+      // ✅ ENSURE they're in the Socket.IO room (in case they reconnected)
+      const gameRoom = `table:${data.tableId}`;
+      client.join(gameRoom);
+      this.logger.log(`🎮 Client ${client.id} rejoined game room: ${gameRoom}`);
+      
       // IMPORTANT: Still check for auto-start even on rejoin!
       // The second player might have joined while this player was navigating
       // ONLY start countdown when EXACTLY 2 players
@@ -1336,7 +1844,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
           
           // Start game after 10-second delay
           const timer = setTimeout(() => {
-            this.autoStartGame(table.id);
+          this.autoStartGame(table.id);
             this.countdownTimers.delete(table.id); // Clean up timer reference
           }, 10000); // 10 seconds
           
@@ -1362,13 +1870,49 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       };
     }
     
-    // Add player with real user data
+    // ✅ FIX: Fetch user's platformScore from database to set initial balance
+    let userBalance = 0;
+    try {
+      const userRecord = await this.usersRepository.findOne({ where: { id: data.userId } });
+      if (userRecord && userRecord.platformScore !== null && userRecord.platformScore !== undefined) {
+        userBalance = Math.round(Number(userRecord.platformScore));
+        this.logger.log(`💰 Fetched platformScore for ${data.userEmail}: ${userBalance} SEKA`);
+      } else {
+        this.logger.warn(`⚠️ No platformScore found for ${data.userEmail}, defaulting to 0`);
+      }
+    } catch (error) {
+      this.logger.error(`❌ Error fetching user platformScore: ${error.message}`);
+    }
+    
+    // Add player with real user data and balance
     table.players.push({
       userId: data.userId,
       email: data.userEmail,
       username: data.username || data.userEmail.split('@')[0], // Fallback to email prefix
       avatar: data.avatar || undefined,
-    });
+      balance: userBalance, // ✅ Set from platformScore
+      isActive: true,
+      joinedAt: new Date(),
+      socketId: client.id,
+    } as any);
+    
+    // ✅ CRITICAL FIX: Join the Socket.IO room to receive game events!
+    const gameRoom = `table:${data.tableId}`;
+    client.join(gameRoom);
+    this.logger.log(`🎮 Client ${client.id} joined game room: ${gameRoom}`);
+    
+    // ✅ UPDATE DATABASE with new player count (ALL tables)
+    (async () => {
+      try {
+        await this.gameTablesRepository.update(data.tableId, {
+          currentPlayers: table.players.length,
+        });
+        this.logger.log(`💾 ✅ Database updated: Table ${data.tableId} now has ${table.players.length} players`);
+      } catch (error) {
+        this.logger.error(`❌ Failed to update table in database: ${error.message}`);
+      }
+    })();
+
     
     const isCreator = data.userId === table.creatorId;
     this.logger.log(`✅ Player ${data.userEmail} joined table ${table.tableName} (${table.players.length}/${table.maxPlayers})`);
@@ -1443,6 +1987,12 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   /**
+   * Invite a bot to join a table
+   * Bots auto-join immediately and are ready to play
+   */
+  // ❌ REMOVED: handleInviteBotToTable - Bots are no longer used
+
+  /**
    * AUTO-START GAME (called internally when 2+ players join)
    */
   private async autoStartGame(tableId: string) {
@@ -1463,9 +2013,98 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       return;
     }
     
+    // ✅ CHECK PLAYER BALANCES BEFORE STARTING
+    this.logger.log(`💰 Checking player balances before auto-start (Entry fee: ${table.entryFee})...`);
+    const playersWithInsufficientBalance: string[] = [];
+    
+    for (const player of table.players) {
+      try {
+        const balanceData = await this.walletService.getBalance(player.userId);
+        const availableBalance = balanceData.platformScore; // Use platformScore for gameplay
+        
+        this.logger.log(`   Player ${player.email}: Balance ${availableBalance}, Required ${table.entryFee}`);
+        
+        if (availableBalance < table.entryFee) {
+          this.logger.warn(`   ❌ ${player.email} has insufficient balance (${availableBalance} < ${table.entryFee})`);
+          playersWithInsufficientBalance.push(player.userId);
+        }
+      } catch (error) {
+        this.logger.error(`❌ Error checking balance for ${player.email}: ${error.message}`);
+        playersWithInsufficientBalance.push(player.userId);
+      }
+    }
+    
+    // Remove players with insufficient balance
+    if (playersWithInsufficientBalance.length > 0) {
+      this.logger.warn(`🚫 Removing ${playersWithInsufficientBalance.length} player(s) with insufficient balance`);
+      
+      for (const userId of playersWithInsufficientBalance) {
+        const playerIndex = table.players.findIndex(p => p.userId === userId);
+        if (playerIndex !== -1) {
+          const removedPlayer = table.players[playerIndex];
+          table.players.splice(playerIndex, 1);
+          this.logger.log(`   🚫 Removed ${removedPlayer.email} from table ${table.tableName}`);
+          
+          // Notify the removed player
+          const playerSocketId = this.userSockets.get(userId);
+          if (playerSocketId) {
+            this.server.to(playerSocketId).emit('player_removed_insufficient_balance', {
+              tableId: table.id,
+              tableName: table.tableName,
+              entryFee: table.entryFee,
+              message: `You have been removed from the table due to insufficient balance. Required: ${table.entryFee}`,
+              timestamp: new Date(),
+            });
+          }
+        }
+      }
+      
+      // Update database player count (ALL tables)
+      try {
+        await this.gameTablesRepository.update(table.id, {
+          currentPlayers: table.players.length,
+        });
+        this.logger.log(`💾 ✅ Database updated: Table ${table.id} player count = ${table.players.length}`);
+      } catch (error) {
+        this.logger.error(`❌ Failed to update table player count: ${error.message}`);
+      }
+      
+      // Check if we still have enough players after removal
+      if (table.players.length < 2) {
+        this.logger.warn(`⚠️ Not enough players remaining after balance check (${table.players.length}). Cancelling auto-start.`);
+        table.status = 'waiting';
+        
+        // Notify remaining players
+        this.server.to(`table:${table.id}`).emit('table_updated', {
+          id: table.id,
+          tableName: table.tableName,
+          entryFee: table.entryFee,
+          currentPlayers: table.players.length,
+          maxPlayers: table.maxPlayers,
+          status: table.status,
+          message: 'Game cancelled - not enough players with sufficient balance',
+          timestamp: new Date(),
+        });
+        
+        return;
+      }
+      
+      this.logger.log(`✅ ${table.players.length} players remaining with sufficient balance - proceeding with game start`);
+    }
+    
     try {
       this.logger.log(`🎮 AUTO-STARTING game for table: ${table.tableName} with ${table.players.length} players`);
       table.status = 'in_progress';
+      
+      // ✅ UPDATE DATABASE status to 'playing' (ALL tables)
+      try {
+        await this.gameTablesRepository.update(table.id, {
+          status: 'playing',
+        });
+        this.logger.log(`💾 ✅ Database updated: Table ${table.id} status changed to 'playing'`);
+      } catch (error) {
+        this.logger.error(`❌ Failed to update table status in database: ${error.message}`);
+      }
       
       // Create game in database and initialize with game engine
       const playerIds = table.players.map(p => p.userId);
@@ -1526,7 +2165,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
    * Leave table (IN-MEMORY) - Only delete when COMPLETELY empty (0 players)
    */
   @SubscribeMessage('leave_table')
-  handleLeaveTable(
+  async handleLeaveTable(
     @ConnectedSocket() client: Socket,
     @MessageBody() data: {
       tableId: string;
@@ -1571,18 +2210,40 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     
     // ONLY delete if table is COMPLETELY EMPTY (0 players)
     if (table.players.length === 0) {
-      this.activeTables.delete(data.tableId);
-      this.logger.log(`🗑️ Table ${table.tableName} deleted - NO PLAYERS REMAINING`);
+      // ✅ FIX: Add 5-second delay before deleting empty table
+      this.logger.log(`⏱️ Table ${table.tableName} is now empty - will delete in 5 seconds if still empty`);
       
-      // Broadcast table removal
-      this.server.to('lobby').emit('table_removed', {
-        id: table.id,
-      timestamp: new Date(),
-    });
+      setTimeout(async () => {
+        // Re-check if table still exists and is still empty
+        const currentTable = this.activeTables.get(data.tableId);
+        if (currentTable && currentTable.players.length === 0) {
+          this.activeTables.delete(data.tableId);
+          this.logger.log(`🗑️ Table ${currentTable.tableName} deleted after 5-second delay - NO PLAYERS REJOINED`);
+          
+          // ✅ DELETE FROM DATABASE when last player leaves (ALL tables)
+          try {
+            await this.gameTablesRepository.delete(data.tableId);
+            this.logger.log(`💾 ✅ Deleted table ${data.tableId} from database (last player left)`);
+          } catch (error) {
+            this.logger.error(`❌ Failed to delete table from database: ${error.message}`);
+          }
+          
+          // Broadcast table removal
+          this.server.to('lobby').emit('table_removed', {
+            id: currentTable.id,
+            reason: 'all_players_left',
+            timestamp: new Date(),
+          });
+        } else if (currentTable) {
+          this.logger.log(`✅ Table ${currentTable.tableName} NOT deleted - players rejoined (${currentTable.players.length} players)`);
+        } else {
+          this.logger.log(`⚠️ Table ${data.tableId} already deleted by another process`);
+        }
+      }, 5000); // 5 seconds delay
       
       return {
         success: true,
-        message: 'Left table - table deleted (empty)'
+        message: 'Left table - table will be deleted in 5 seconds if empty'
       };
     }
     
@@ -1592,7 +2253,17 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     // START idle timeout if table now has exactly 1 player
     if (table.players.length === 1) {
       table.singlePlayerSince = new Date();
-      this.logger.log(`   ⏰ Started 10-minute idle timeout - table now has only 1 player`);
+      this.logger.log(`   ⏰ Started 1-minute idle timeout - table now has only 1 player`);
+    }
+    
+    // ✅ UPDATE DATABASE with reduced player count (ALL tables)
+    try {
+      await this.gameTablesRepository.update(data.tableId, {
+        currentPlayers: table.players.length,
+      });
+      this.logger.log(`💾 ✅ Database updated: Table ${data.tableId} now has ${table.players.length} players`);
+    } catch (error) {
+      this.logger.error(`❌ Failed to update table in database: ${error.message}`);
     }
     
     // Broadcast table update
@@ -1615,60 +2286,14 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
   // ==================== GAME LOGIC HANDLERS ====================
 
   /**
-   * Player chooses to see their cards (ends blind betting for this player)
+   * ❌ REMOVED: handleSeeCards was a duplicate of handlePlayerViewCards
+   * 
+   * This handler listened to 'see_cards' event but performed the exact same
+   * function as handlePlayerViewCards (listens to 'player_view_cards').
+   * 
+   * To reduce code duplication, we now only use handlePlayerViewCards.
+   * Frontend should emit 'player_view_cards' event.
    */
-  @SubscribeMessage('see_cards')
-  async handleSeeCards(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: { tableId: string; userId: string },
-  ) {
-    const table = this.activeTables.get(data.tableId);
-    
-    if (!table || !table.gameId) {
-      return { success: false, message: 'Game not found or not started' };
-    }
-    
-    try {
-      const game = await this.gameService.findOne(table.gameId);
-      const player = game.players.find(p => p.userId === data.userId);
-      
-      if (!player) {
-        return { success: false, message: 'Player not found in game' };
-      }
-      
-      if (player.hasSeenCards) {
-        return { success: false, message: 'You have already seen your cards' };
-      }
-      
-      // Mark player as having seen their cards
-      player.hasSeenCards = true;
-      await this.gameService.saveGame(game);
-      
-      this.logger.log(`👁️ Player ${data.userId} has SEEN their cards (no longer blind)`);
-      
-      // Get updated game state
-      const gameState = await this.gameEngine.getGameState(game);
-      
-      // Broadcast to all players that this player has seen their cards
-      this.server.to(`table:${data.tableId}`).emit('player_seen_cards', {
-        tableId: data.tableId,
-        userId: data.userId,
-        gameState: gameState,
-      timestamp: new Date(),
-    });
-      
-      return { 
-        success: true, 
-        message: 'Cards revealed',
-        hand: player.hand,
-        gameState: gameState
-      };
-      
-    } catch (error) {
-      this.logger.error(`Error handling see_cards: ${error.message}`);
-      return { success: false, message: error.message };
-    }
-  }
 
   /**
    * Start game - DEPRECATED: Now uses auto-start when 2+ players join
@@ -1714,6 +2339,9 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       const game = await this.gameService.findOne(gameId);
       const availableActions = this.gameEngine.getAvailableActions(game, userId);
       
+      // ❌ REMOVED: Bot auto-play code - Bots are no longer used
+      
+      // Send turn notification
       this.server.to(socketId).emit('your_turn', {
         gameId,
         userId,
@@ -1724,8 +2352,22 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       timestamp: new Date(),
     });
       
-      this.logger.log(`Notified ${userId} it's their turn in game ${gameId}`);
+      this.logger.log(`📢 Notified ${userId} it's their turn in game ${gameId}`);
     }
+  }
+
+  /**
+   * Helper method to find a user's socket by userId
+   */
+  private async findUserSocket(userId: string): Promise<any> {
+    const socketId = this.userSockets.get(userId);
+    if (socketId) {
+      const socket = this.server.sockets.sockets.get(socketId);
+      if (socket && socket.connected) {
+        return socket;
+      }
+    }
+    return null;
   }
 
   /**
@@ -1737,6 +2379,10 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       const gameState = await this.gameEngine.getGameState(game);
       
       this.logger.log(`🏆 Showdown - Phase: ${gameState.phase}, Winners: ${gameState.winners.join(', ')}`);
+      
+      // ✅ Use finalPot (saved before distribution) to show correct pot amount
+      const potAmount = gameState.finalPot || gameState.pot || 0;
+      this.logger.log(`💰 Showdown Pot - finalPot: ${gameState.finalPot}, current pot: ${gameState.pot}, using: ${potAmount}`);
       
       // Prepare showdown data with all hands revealed
       const showdownData = {
@@ -1757,7 +2403,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
           hasSeenCards: true, // All cards seen in showdown
         })),
         winners: gameState.winners,
-        pot: gameState.pot,
+        pot: potAmount, // ✅ Use saved final pot amount
         timestamp: new Date(),
       };
       
@@ -1767,6 +2413,35 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       this.logger.log(`✅ Broadcasted showdown to table ${tableId}`);
       this.logger.log(`   Winners: ${gameState.winners.join(', ')}`);
       this.logger.log(`   Pot: ${gameState.pot}`);
+      
+      // ✅ Emit updated balances to winners for real-time UI update
+      const updatedBalances = (gameState as any).updatedBalances;
+      if (updatedBalances && Array.isArray(updatedBalances)) {
+        this.logger.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+        this.logger.log(`💰 EMITTING BALANCE UPDATES`);
+        this.logger.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+        
+        for (const balanceUpdate of updatedBalances) {
+          const { userId, balance } = balanceUpdate;
+          this.logger.log(`   → User ${userId}: ${balance} SEKA`);
+          
+          // Emit to specific user's socket
+          const userSocket = await this.findUserSocket(userId);
+          if (userSocket) {
+            userSocket.emit('balance_updated', {
+              userId,
+              platformScore: balance,
+              reason: 'game_win',
+              timestamp: new Date()
+            });
+            this.logger.log(`   ✅ Sent balance update to ${userId}`);
+          } else {
+            this.logger.warn(`   ⚠️ Socket not found for user ${userId}`);
+          }
+        }
+        
+        this.logger.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+      }
       
       // If game completed, send completion event
       if (gameState.status === 'completed') {
@@ -1927,10 +2602,16 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         
         // CONTINUOUS CYCLING: Auto-start next game if 2+ players remain
         if (table.players.length >= 2) {
-          this.logger.log(`🔄 CONTINUOUS CYCLING: ${table.players.length} players remain - auto-starting next game in 3 seconds...`);
-          setTimeout(() => {
+          this.logger.log(`🔄 CONTINUOUS CYCLING: ${table.players.length} players remain - auto-starting next game NOW (already had 10s countdown)...`);
+          // ✅ FIX: Start immediately - we already had a 10-second countdown from modal close
+          // No need for another delay
+          const currentTable = this.activeTables.get(table.id);
+          if (currentTable && currentTable.players.length >= 2) {
+            this.logger.log(`🎮 AUTO-STARTING next game for table ${currentTable.tableName}...`);
             this.autoStartGame(table.id);
-          }, 3000); // 3 second delay between games
+          } else {
+            this.logger.log(`⏸️ Auto-start cancelled - not enough players (${currentTable?.players.length || 0})`);
+          }
         } else {
           this.logger.log(`⏸️ Only ${table.players.length} player remaining - waiting for more players to join`);
         }
@@ -2004,14 +2685,17 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   /**
    * Broadcast game state update (called from game service)
+   * 🔒 SECURE: Sends sanitized state to each player
    */
   async broadcastGameStateUpdate(gameId: string) {
     try {
-      const gameState = await this.gameService.getGameState(gameId);
+      const game = await this.gameService.findOne(gameId);
+      const tableId = game.tableId;
       
-      this.server.to(`game:${gameId}`).emit('game_state_updated', gameState);
+      // 🔒 SECURE: Broadcast sanitized game state to each player
+      await this.broadcastSanitizedGameState(game, tableId);
       
-      this.logger.log(`Broadcasted state update for game ${gameId}`);
+      this.logger.log(`Broadcasted sanitized state update for game ${gameId}`);
     } catch (error) {
       this.logger.error(`Error broadcasting game state: ${error.message}`);
     }
@@ -2040,6 +2724,33 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
    */
   isUserConnected(userId: string): boolean {
     return this.userSockets.has(userId);
+  }
+
+  /**
+   * 🔒 SECURE: Broadcast sanitized game state to each player individually
+   * Each player only receives card data they're allowed to see
+   */
+  private async broadcastSanitizedGameState(game: any, tableId: string) {
+    try {
+      // Get all players in the game
+      const playerUserIds = game.players.map(p => p.userId);
+      
+      // For each player, send their personalized game state
+      for (const userId of playerUserIds) {
+        const socketId = this.userSockets.get(userId);
+        if (socketId) {
+          // Get sanitized game state for this specific user
+          const sanitizedState = await this.gameStateService.getSanitizedGameStateForUser(game, userId);
+          
+          // Send personalized state to this user only
+          this.server.to(socketId).emit('game_state_updated', sanitizedState);
+          
+          this.logger.log(`🔒 Sent sanitized game state to ${userId} (has cards: ${game.players.find(p => p.userId === userId)?.hasSeenCards})`);
+        }
+      }
+    } catch (error) {
+      this.logger.error(`❌ Error broadcasting sanitized game state: ${error.message}`);
+    }
   }
 
   /**
