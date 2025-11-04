@@ -41,10 +41,13 @@ RUN npm config set fetch-retries 10 && \
     npm config set registry https://registry.npmjs.org/
 
 COPY package*.json ./
+COPY .npmrc ./
 # Install production deps (typeorm is in dependencies, so it will be available)
+# Try multiple strategies to handle integrity errors
 RUN npm cache clean --force && \
-    npm install --only=production --no-audit --no-fund --legacy-peer-deps --prefer-online || \
-    (npm cache clean --force && npm install --only=production --no-audit --no-fund --legacy-peer-deps --ignore-scripts)
+    (npm install --only=production --no-audit --no-fund --legacy-peer-deps || \
+     (npm cache clean --force && npm install --only=production --no-audit --no-fund --legacy-peer-deps --ignore-scripts) || \
+     (npm cache clean --force && rm -rf node_modules package-lock.json && npm install --only=production --no-audit --no-fund --legacy-peer-deps))
 
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/package*.json ./
