@@ -14,8 +14,8 @@ if (databaseUrl) {
   dataSourceConfig = {
     type: 'postgres' as const,
     url: databaseUrl,
-    entities: ['src/**/*.entity{.ts,.js}'],
-    migrations: ['src/database/migrations/*{.ts,.js}'],
+    entities: [process.env.NODE_ENV === 'production' ? 'dist/**/*.entity.js' : 'src/**/*.entity{.ts,.js}'],
+    migrations: [process.env.NODE_ENV === 'production' ? 'dist/database/migrations/*.js' : 'src/database/migrations/*{.ts,.js}'],
     synchronize: process.env.DB_SYNCHRONIZE === 'true',
     logging: process.env.DB_LOGGING === 'true',
     ssl: databaseUrl.includes('sslmode=require') || databaseUrl.includes('neon.tech')
@@ -31,8 +31,8 @@ if (databaseUrl) {
     username: process.env.DB_USERNAME || 'postgres',
     password: process.env.DB_PASSWORD || 'postgres',
     database: process.env.DB_NAME || 'seka_svara_db',
-    entities: ['src/**/*.entity{.ts,.js}'],
-    migrations: ['src/database/migrations/*{.ts,.js}'],
+    entities: [process.env.NODE_ENV === 'production' ? 'dist/**/*.entity.js' : 'src/**/*.entity{.ts,.js}'],
+    migrations: [process.env.NODE_ENV === 'production' ? 'dist/database/migrations/*.js' : 'src/database/migrations/*{.ts,.js}'],
     synchronize: process.env.DB_SYNCHRONIZE === 'true',
     logging: process.env.DB_LOGGING === 'true',
     ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
