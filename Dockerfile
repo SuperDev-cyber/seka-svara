@@ -30,14 +30,12 @@ RUN npm config set fetch-retries 10 && \
     npm config set fetch-retry-maxtimeout 600000
 
 COPY package*.json ./
-# Install production deps + typeorm CLI for migrations
+# Install production deps (typeorm is in dependencies, so it will be available)
 RUN npm cache clean --force && \
-    npm install --only=production --no-audit --no-fund && \
-    npm install -g typeorm ts-node --no-audit --no-fund
+    npm install --only=production --no-audit --no-fund
 
 COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/src/config/typeorm.config.js ./src/config/
-COPY --from=builder /app/src/database/migrations ./src/database/migrations
+COPY --from=builder /app/package*.json ./
 COPY --from=builder /app/start.sh ./start.sh
 
 # Make startup script executable
