@@ -93,6 +93,10 @@
     "tsconfig-paths": "^4.2.0",
     "typescript": "^5.3.3"
   },
+  "overrides": {
+    "async": "3.2.5",
+    "source-map-js": "1.2.0"
+  },
   "jest": {
     "moduleFileExtensions": [
       "js",
