@@ -15,10 +15,12 @@ RUN npm config set fetch-retries 10 && \
 COPY package*.json ./
 COPY .npmrc ./
 # Install ALL dependencies (including devDependencies for build tools like @nestjs/cli)
-# Using --legacy-peer-deps to avoid peer dependency conflicts and --prefer-online to ensure fresh downloads
+# Using --legacy-peer-deps to avoid peer dependency conflicts
+# Try multiple strategies to handle integrity errors
 RUN npm cache clean --force && \
-    npm install --no-audit --no-fund --legacy-peer-deps --prefer-online || \
-    (npm cache clean --force && npm install --no-audit --no-fund --legacy-peer-deps --ignore-scripts)
+    (npm install --no-audit --no-fund --legacy-peer-deps || \
+     (npm cache clean --force && npm install --no-audit --no-fund --legacy-peer-deps --ignore-scripts) || \
+     (npm cache clean --force && rm -rf node_modules package-lock.json && npm install --no-audit --no-fund --legacy-peer-deps))
 
 COPY . .
 # Build the application (nest CLI is now available from node_modules/.bin)

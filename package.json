@@ -95,7 +95,8 @@
   },
   "overrides": {
     "async": "3.2.5",
-    "source-map-js": "1.2.0"
+    "source-map-js": "1.2.0",
+    "@bcoe/v8-coverage": "^0.2.3"
   },
   "jest": {
     "moduleFileExtensions": [
