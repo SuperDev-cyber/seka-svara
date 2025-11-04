@@ -1,10 +1,10 @@
 import { Controller, Get } from '@nestjs/common';
 
 /**
- * Health Controller - Routes excluded from global prefix
+ * Health Controller - Registered before global prefix
  * This controller handles health checks at root level for Render/deployment platforms
  */
-@Controller({ path: '', exclude: ['api/v1'] })
+@Controller()
 export class HealthController {
   @Get('health')
   getHealth() {

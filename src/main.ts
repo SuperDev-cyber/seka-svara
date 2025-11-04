@@ -43,7 +43,17 @@ async function bootstrap() {
     allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
   });
 
-  // Global prefix - health endpoint is handled by HealthController (excluded from prefix)
+  // Register health endpoint before setting global prefix (so it's at root level)
+  app.getHttpAdapter().get('/health', (req, res) => {
+    res.json({
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+      environment: process.env.NODE_ENV || 'development'
+    });
+  });
+
+  // Global prefix - health endpoint is already registered at root level
   app.setGlobalPrefix(process.env.API_PREFIX || 'api/v1');
 
   // Validation
