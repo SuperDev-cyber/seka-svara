@@ -3,8 +3,16 @@ FROM node:18-alpine AS builder
 
 WORKDIR /app
 
+# Configure npm to handle integrity issues
+RUN npm config set fetch-retries 10 && \
+    npm config set fetch-retry-factor 2 && \
+    npm config set fetch-retry-mintimeout 10000 && \
+    npm config set fetch-retry-maxtimeout 600000
+
 COPY package*.json ./
-RUN npm ci
+# Use npm install with cache clean to avoid integrity errors
+RUN npm cache clean --force && \
+    npm install --no-audit --no-fund
 
 COPY . .
 RUN npm run build
@@ -14,8 +22,16 @@ FROM node:18-alpine
 
 WORKDIR /app
 
+# Configure npm for production stage
+RUN npm config set fetch-retries 10 && \
+    npm config set fetch-retry-factor 2 && \
+    npm config set fetch-retry-mintimeout 10000 && \
+    npm config set fetch-retry-maxtimeout 600000
+
 COPY package*.json ./
-RUN npm ci --only=production
+# Use npm install with cache clean for production
+RUN npm cache clean --force && \
+    npm install --only=production --no-audit --no-fund
 
 COPY --from=builder /app/dist ./dist
 
