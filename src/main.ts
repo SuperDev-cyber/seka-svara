@@ -43,8 +43,11 @@ async function bootstrap() {
     allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
   });
 
-  // Register health endpoint before setting global prefix (so it's at root level)
-  app.getHttpAdapter().get('/health', (req, res) => {
+  // Register root endpoints before setting global prefix (so they're at root level)
+  const httpAdapter = app.getHttpAdapter();
+  
+  // Health endpoint for Render health checks
+  httpAdapter.get('/health', (req, res) => {
     res.json({
       status: 'ok',
       timestamp: new Date().toISOString(),
@@ -53,7 +56,18 @@ async function bootstrap() {
     });
   });
 
-  // Global prefix - health endpoint is already registered at root level
+  // Root endpoint
+  httpAdapter.get('/', (req, res) => {
+    res.json({
+      message: 'Seka Svara API',
+      version: '1.0.0',
+      documentation: '/api/docs',
+      health: '/health',
+      api: '/api/v1'
+    });
+  });
+
+  // Global prefix - root endpoints are already registered at root level
   app.setGlobalPrefix(process.env.API_PREFIX || 'api/v1');
 
   // Validation
