@@ -1,7 +1,7 @@
 #!/bin/sh
 # Run migrations before starting the server
 echo "🔄 Running database migrations..."
-npm run migration:run
+typeorm migration:run -d dist/config/typeorm.config.js || echo "⚠️ Migration failed, continuing anyway..."
 
 # Start the server
 echo "🚀 Starting NestJS server..."
