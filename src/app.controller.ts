@@ -7,6 +7,12 @@ export class AppController {
     return { status: 'ok', timestamp: new Date().toISOString() };
   }
 
+  // Health check at root level (bypasses global prefix) for Render health checks
+  @Get('/health')
+  getHealthRoot() {
+    return { status: 'ok', timestamp: new Date().toISOString() };
+  }
+
   @Get()
   getRoot() {
     return {
