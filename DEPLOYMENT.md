@@ -106,12 +106,42 @@ docker run -it --rm postgres psql "postgresql://neondb_owner:npg_X5GFVMD6grQH@ep
 1. In your Redis database dashboard
 2. Click **Details** tab
 3. Copy the **REST URL** or **Redis URL**
-4. Format: `rediss://default:PASSWORD@HOST:PORT` (note: `rediss://` with double 's' for TLS)
+4. **IMPORTANT**: Upstash requires TLS, so use `rediss://` (with double 's') not `redis://`
+5. Format: `rediss://default:PASSWORD@HOST:PORT`
 
 **Example Upstash Connection String:**
 ```
-rediss://default:AbCdEf123456@us1-bold-12345.upstash.io:12345
+rediss://default:AYHTAAIncDIxNzdmNjc1NTA0MjQ0YjYyOWYwNWFmMzRmZDE0ZGZmZXAyMzMyMzU@native-jennet-33235.upstash.io:6379
 ```
+
+### 2.4 (Optional) Test Connection Locally
+
+**Option A: Using Node.js Script (Recommended for Windows)**
+Create `test-redis-connection.js` in your backend folder:
+```javascript
+const Redis = require('ioredis');
+
+const redis = new Redis('rediss://default:PASSWORD@HOST:PORT', {
+  tls: { rejectUnauthorized: false }
+});
+
+redis.ping().then(() => {
+  console.log('✅ Connected to Upstash Redis!');
+  redis.quit();
+});
+```
+
+Run: `node test-redis-connection.js`
+
+**Option B: Using Docker (if you have Docker installed)**
+```powershell
+docker run -it --rm redis redis-cli --tls -u "rediss://default:PASSWORD@HOST:PORT"
+```
+
+**Option C: Install Redis CLI on Windows**
+1. Download Redis for Windows from https://github.com/microsoftarchive/redis/releases
+2. Or use WSL (Windows Subsystem for Linux) and install Redis CLI there
+3. Run: `redis-cli --tls -u "rediss://default:PASSWORD@HOST:PORT"`
 
 ---
 
