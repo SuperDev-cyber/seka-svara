@@ -4,7 +4,6 @@ services:
     env: docker
     plan: starter
     autoDeploy: true
-    rootDir: backend/Seka-Svara-CP-For-Server
     healthCheckPath: /health
     buildCommand: npm ci && npm run build
     startCommand: npm run migration:run && npm run start:prod
