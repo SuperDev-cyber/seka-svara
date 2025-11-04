@@ -175,34 +175,122 @@ docker run -it --rm redis redis-cli --tls -u "rediss://default:PASSWORD@HOST:POR
 
 ### 3.4 Set Environment Variables
 
-Go to **Environment** tab and add:
+Go to **Environment** tab and add all the following variables:
 
-#### Required Variables:
+#### Complete Environment Variables List:
+
 ```env
+# ============================================
+# REQUIRED - Core Application
+# ============================================
 NODE_ENV=production
 PORT=8000
-DATABASE_URL=postgres://user:password@host:port/db?sslmode=require
-REDIS_URL=rediss://default:password@host:port
-JWT_SECRET=your-strong-random-secret-here
+API_PREFIX=api/v1
+
+# ============================================
+# REQUIRED - Database (Neon PostgreSQL)
+# ============================================
+DATABASE_URL=postgresql://neondb_owner:npg_X5GFVMD6grQH@ep-crimson-mud-ahyc8cbg-pooler.c-3.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require
+
+# Database Configuration (if not using DATABASE_URL)
+# DB_HOST=localhost
+# DB_PORT=5432
+# DB_USERNAME=postgres
+# DB_PASSWORD=postgres
+# DB_NAME=seka_svara_db
+
+# Database Settings
 DB_SYNCHRONIZE=false
 DB_LOGGING=false
-```
 
-#### Frontend CORS:
-```env
-CORS_ORIGINS=https://your-frontend.vercel.app,http://localhost:5173
-```
-Replace `your-frontend.vercel.app` with your actual Vercel frontend URL.
+# ============================================
+# REQUIRED - Redis (Upstash)
+# ============================================
+REDIS_URL=rediss://default:AYHTAAIncDIxNzdmNjc1NTA0MjQ0YjYyOWYwNWFmMzRmZDE0ZGZmZXAyMzMyMzU@native-jennet-33235.upstash.io:6379
 
-#### Optional Variables (if you use them):
-```env
+# Redis Configuration (if not using REDIS_URL)
+# REDIS_HOST=localhost
+# REDIS_PORT=6379
+# REDIS_PASSWORD=
+# REDIS_DB=0
+
+# ============================================
+# REQUIRED - Authentication & Security
+# ============================================
+JWT_SECRET=CHANGE_THIS_TO_A_STRONG_RANDOM_SECRET_AT_LEAST_32_CHARACTERS_LONG
+JWT_EXPIRATION=7d
+
+# ============================================
+# REQUIRED - CORS Configuration
+# ============================================
+CORS_ORIGINS=https://seka-svara-cp.vercel.app,http://localhost:5173,http://localhost:3000
+
+# ============================================
+# OPTIONAL - Blockchain Integration (BSC)
+# ============================================
 BSC_RPC_URL=https://bsc-dataseed.binance.org/
-TRON_API_KEY=your-tron-api-key
+# BSC_RPC_URL=https://bsc-testnet.public.blastapi.io (for testnet)
+
+# ============================================
+# OPTIONAL - Blockchain Integration (Tron)
+# ============================================
+TRON_API_KEY=your-tron-api-key-here
+# Get your API key from: https://www.trongrid.io/
+
+# ============================================
+# OPTIONAL - Email Service (SMTP)
+# ============================================
 EMAIL_HOST=smtp.gmail.com
 EMAIL_PORT=587
 EMAIL_USER=your-email@gmail.com
-EMAIL_PASS=your-app-password
+EMAIL_PASS=your-app-specific-password
+EMAIL_FROM=noreply@seka-svara.com
+
+# Alternative: Use SendGrid
+# SENDGRID_API_KEY=your-sendgrid-api-key
+# SENDGRID_FROM_EMAIL=noreply@seka-svara.com
+
+# ============================================
+# OPTIONAL - Admin Wallet Addresses (for USDT)
+# ============================================
+# ADMIN_BEP20_WALLET=0xYourBEP20WalletAddress
+# ADMIN_TRC20_WALLET=TYourTRC20WalletAddress
+
+# ============================================
+# OPTIONAL - Platform Settings
+# ============================================
+# PLATFORM_NAME=Seka Svara
+# PLATFORM_URL=https://seka-svara-cp.vercel.app
 ```
+
+#### Important Notes:
+
+1. **JWT_SECRET**: Generate a strong random string:
+   ```bash
+   # On Linux/Mac:
+   openssl rand -base64 32
+   
+   # On Windows PowerShell:
+   -join ((48..57) + (65..90) + (97..122) | Get-Random -Count 32 | ForEach-Object {[char]$_})
+   ```
+
+2. **CORS_ORIGINS**: 
+   - Remove trailing slashes from URLs
+   - Separate multiple origins with commas (no spaces)
+   - Include your Vercel frontend URL and localhost for development
+
+3. **DATABASE_URL vs Individual DB vars**: 
+   - Use `DATABASE_URL` (recommended for Neon/Render)
+   - OR use individual `DB_HOST`, `DB_PORT`, etc. (but not both)
+
+4. **REDIS_URL vs Individual Redis vars**:
+   - Use `REDIS_URL` (recommended for Upstash)
+   - OR use individual `REDIS_HOST`, `REDIS_PORT`, etc. (but not both)
+
+5. **Optional Variables**:
+   - Only add variables you actually use
+   - Blockchain variables are only needed if you use BSC/TRON features
+   - Email variables are only needed if you send emails
 
 ### 3.5 Configure Post-Deploy Migrations
 
