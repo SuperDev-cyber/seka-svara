@@ -13,6 +13,7 @@ RUN npm config set fetch-retries 10 && \
     npm config set registry https://registry.npmjs.org/
 
 COPY package*.json ./
+COPY .npmrc ./
 # Install ALL dependencies (including devDependencies for build tools like @nestjs/cli)
 # Using --legacy-peer-deps to avoid peer dependency conflicts and --prefer-online to ensure fresh downloads
 RUN npm cache clean --force && \
