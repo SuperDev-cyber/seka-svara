@@ -46,37 +46,74 @@ import { AppController } from './app.controller';
       envFilePath: '.env',
     }),
 
-    // Database
+    // Database - Supports both DATABASE_URL (Neon/cloud) and individual vars (local)
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
-      useFactory: (configService: ConfigService) => ({
-        type: 'postgres',
-        host: configService.get('DB_HOST'),
-        port: configService.get('DB_PORT'),
-        username: configService.get('DB_USERNAME'),
-        password: configService.get('DB_PASSWORD'),
-        database: configService.get('DB_NAME'),
-        entities: [
-          User,
-          PlatformScoreTransaction,
-          Game,
-          GamePlayer,
-          GameTable,
-          TablePlayer,
-          Notification,
-          Wallet,
-          WalletTransaction,
-          Transaction,
-          NFT,
-          NFTTransaction,
-          PlatformSettings,
-          Tournament,
-          TournamentPlayer,
-        ],
-        synchronize: configService.get('DB_SYNCHRONIZE') === 'true',
-        logging: configService.get('DB_LOGGING') === 'true',
-        ssl: configService.get('NODE_ENV') === 'production' ? { rejectUnauthorized: false } : false,
-      }),
+      useFactory: (configService: ConfigService) => {
+        const databaseUrl = configService.get<string>('DATABASE_URL');
+        
+        // If DATABASE_URL is provided (Neon/cloud), use it directly
+        if (databaseUrl) {
+          return {
+            type: 'postgres',
+            url: databaseUrl,
+            entities: [
+              User,
+              PlatformScoreTransaction,
+              Game,
+              GamePlayer,
+              GameTable,
+              TablePlayer,
+              Notification,
+              Wallet,
+              WalletTransaction,
+              Transaction,
+              NFT,
+              NFTTransaction,
+              PlatformSettings,
+              Tournament,
+              TournamentPlayer,
+            ],
+            synchronize: configService.get('NODE_ENV') !== 'production', // false in production
+            logging: configService.get('DB_LOGGING') === 'true',
+            ssl: databaseUrl.includes('sslmode=require') 
+              ? { rejectUnauthorized: false } 
+              : configService.get('NODE_ENV') === 'production' 
+              ? { rejectUnauthorized: false } 
+              : false,
+          };
+        }
+
+        // Fallback to individual DB vars (local development)
+        return {
+          type: 'postgres',
+          host: configService.get('DB_HOST') || 'localhost',
+          port: parseInt(configService.get('DB_PORT') || '5432', 10),
+          username: configService.get('DB_USERNAME') || 'postgres',
+          password: configService.get('DB_PASSWORD') || 'postgres',
+          database: configService.get('DB_NAME') || 'seka_svara_db',
+          entities: [
+            User,
+            PlatformScoreTransaction,
+            Game,
+            GamePlayer,
+            GameTable,
+            TablePlayer,
+            Notification,
+            Wallet,
+            WalletTransaction,
+            Transaction,
+            NFT,
+            NFTTransaction,
+            PlatformSettings,
+            Tournament,
+            TournamentPlayer,
+          ],
+          synchronize: configService.get('DB_SYNCHRONIZE') === 'true',
+          logging: configService.get('DB_LOGGING') === 'true',
+          ssl: configService.get('NODE_ENV') === 'production' ? { rejectUnauthorized: false } : false,
+        };
+      },
       inject: [ConfigService],
     }),
 

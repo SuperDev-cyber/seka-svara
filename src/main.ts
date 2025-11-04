@@ -21,9 +21,18 @@ async function bootstrap() {
   app.use(compression());
   app.use(cookieParser());
 
-  // CORS for HTTP - Allow all local network connections for testing
+  // CORS for HTTP - Allow frontend domain and local development
+  const allowedOrigins = [
+    process.env.FRONTEND_URL, // Your Vercel frontend URL
+    'http://localhost:5173', // Vite dev server
+    'http://localhost:3000', // Alternative local dev
+    ...(process.env.NODE_ENV === 'development' ? ['*'] : []), // Allow all in dev
+  ].filter(Boolean); // Remove undefined values
+
   app.enableCors({
-    origin: true, // Allow all origins for local network testing
+    origin: process.env.NODE_ENV === 'production' 
+      ? allowedOrigins.length > 0 ? allowedOrigins : true
+      : true, // Allow all in development
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],

@@ -1,20 +1,39 @@
 services:
   - type: web
-    name: seka-svara-cp-for-server
-    env: docker
+    name: seka-svara-backend
+    env: node
     plan: starter
+    region: oregon
     autoDeploy: true
+    buildCommand: npm ci && npm run build
+    startCommand: npm run start:prod
     healthCheckPath: /health
     envVars:
       - key: NODE_ENV
         value: production
       - key: PORT
         value: 8000
-      # Add your own values or link to Render-managed services for these
       - key: DATABASE_URL
         sync: false
+        # Get this from Neon dashboard after creating database
+        # Format: postgres://user:password@host:port/dbname?sslmode=require
       - key: REDIS_URL
         sync: false
+        # Get this from Upstash dashboard after creating Redis
+        # Format: rediss://default:password@host:port
       - key: JWT_SECRET
         generateValue: true
+        # Auto-generates a secure random value
+      - key: JWT_EXPIRATION
+        value: 7d
+      - key: DB_LOGGING
+        value: "false"
+      - key: DB_SYNCHRONIZE
+        value: "false"
+      # Add your other environment variables here
+      # - key: BSC_RPC_URL
+      #   value: https://bsc-dataseed.binance.org/
+      # - key: TRON_API_KEY
+      #   value: your-tron-api-key
+    postDeployCommand: npm run migration:run
 
