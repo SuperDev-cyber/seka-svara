@@ -43,10 +43,8 @@ async function bootstrap() {
     allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
   });
 
-  // Global prefix - exclude health endpoint for Render health checks
-  app.setGlobalPrefix(process.env.API_PREFIX || 'api/v1', {
-    exclude: ['/health'],
-  });
+  // Global prefix - health endpoint is handled by HealthController (excluded from prefix)
+  app.setGlobalPrefix(process.env.API_PREFIX || 'api/v1');
 
   // Validation
   app.useGlobalPipes(

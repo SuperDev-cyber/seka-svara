@@ -144,7 +144,7 @@ import { AppController } from './app.controller';
     // TransactionsModule,
     // NftModule,
   ],
-  controllers: [AppController],
+  controllers: [AppController, HealthController],
   providers: [],
 })
 export class AppModule {}
