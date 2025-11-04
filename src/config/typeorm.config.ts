@@ -4,27 +4,27 @@ import { config } from 'dotenv';
 // Load environment variables
 config();
 
-// Support both DATABASE_URL (Neon/cloud) and individual DB vars (local dev)
-const getDataSourceConfig = () => {
-  // If DATABASE_URL is provided (Neon/cloud), use it directly
-  if (process.env.DATABASE_URL) {
-    return {
-      type: 'postgres' as const,
-      url: process.env.DATABASE_URL,
-      entities: ['src/**/*.entity{.ts,.js}'],
-      migrations: ['src/database/migrations/*{.ts,.js}'],
-      synchronize: process.env.NODE_ENV !== 'production', // false in production
-      logging: process.env.DB_LOGGING === 'true',
-      ssl: process.env.DATABASE_URL?.includes('sslmode=require') 
-        ? { rejectUnauthorized: false } 
-        : process.env.NODE_ENV === 'production' 
-        ? { rejectUnauthorized: false } 
-        : false,
-    };
-  }
+// Support DATABASE_URL (for Neon, Render Postgres, etc.) with fallback to individual vars
+const databaseUrl = process.env.DATABASE_URL;
 
-  // Fallback to individual DB vars (local development)
-  return {
+let dataSourceConfig: any;
+
+if (databaseUrl) {
+  // Use DATABASE_URL (Neon format: postgres://user:pass@host:port/db?sslmode=require)
+  dataSourceConfig = {
+    type: 'postgres' as const,
+    url: databaseUrl,
+    entities: ['src/**/*.entity{.ts,.js}'],
+    migrations: ['src/database/migrations/*{.ts,.js}'],
+    synchronize: process.env.DB_SYNCHRONIZE === 'true',
+    logging: process.env.DB_LOGGING === 'true',
+    ssl: databaseUrl.includes('sslmode=require') || databaseUrl.includes('neon.tech')
+      ? { rejectUnauthorized: false }
+      : false,
+  };
+} else {
+  // Fallback to individual environment variables
+  dataSourceConfig = {
     type: 'postgres' as const,
     host: process.env.DB_HOST || 'localhost',
     port: parseInt(process.env.DB_PORT || '5432', 10),
@@ -33,10 +33,10 @@ const getDataSourceConfig = () => {
     database: process.env.DB_NAME || 'seka_svara_db',
     entities: ['src/**/*.entity{.ts,.js}'],
     migrations: ['src/database/migrations/*{.ts,.js}'],
-    synchronize: process.env.NODE_ENV !== 'production', // false in production
+    synchronize: process.env.DB_SYNCHRONIZE === 'true',
     logging: process.env.DB_LOGGING === 'true',
     ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
   };
-};
+}
 
-export default new DataSource(getDataSourceConfig());
+export default new DataSource(dataSourceConfig);

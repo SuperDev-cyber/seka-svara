@@ -1,0 +1,308 @@
+# 🚀 Deployment Guide: Seka Svara Backend to Render.com
+
+Complete step-by-step guide to deploy your NestJS backend to Render.com with Neon PostgreSQL and Upstash Redis.
+
+---
+
+## 📋 Prerequisites
+
+- GitHub account
+- Render.com account (free tier available)
+- Neon account (free tier available)
+- Upstash account (free tier available)
+- Backend code pushed to GitHub: `neonflux-io/seka-svara-cp-for-server`
+
+---
+
+## 🗄️ Step 1: Setup Neon PostgreSQL Database
+
+### 1.1 Create Neon Account
+1. Go to https://neon.tech
+2. Sign up with GitHub/Google/Email
+3. Create a new project:
+   - **Project Name**: `seka-svara-backend`
+   - **Region**: Choose closest to your Render region (e.g., US East)
+   - **PostgreSQL Version**: 15 or 16 (recommended)
+   - Click **Create Project**
+
+### 1.2 Get Connection String
+1. In Neon dashboard, go to your project
+2. Click **Connection Details** or **Connection String**
+3. Copy the full connection string (format: `postgres://user:password@host:port/db?sslmode=require`)
+4. **Important**: The connection string already includes `?sslmode=require` (required for Neon)
+
+**Example Neon Connection String:**
+```
+postgres://neondb_owner:AbCdEf123456@ep-cool-darkness-123456.us-east-2.aws.neon.tech/neondb?sslmode=require
+```
+
+### 1.3 (Optional) Test Connection Locally
+```bash
+psql "postgres://user:password@host:port/db?sslmode=require"
+```
+
+---
+
+## 🔴 Step 2: Setup Upstash Redis
+
+### 2.1 Create Upstash Account
+1. Go to https://upstash.com
+2. Sign up with GitHub/Google/Email
+
+### 2.2 Create Redis Database
+1. Click **Create Database**
+2. **Name**: `seka-svara-redis`
+3. **Type**: Regional (choose region closest to Render)
+4. **TLS**: Enabled (required)
+5. Click **Create**
+
+### 2.3 Get Connection String
+1. In your Redis database dashboard
+2. Click **Details** tab
+3. Copy the **REST URL** or **Redis URL**
+4. Format: `rediss://default:PASSWORD@HOST:PORT` (note: `rediss://` with double 's' for TLS)
+
+**Example Upstash Connection String:**
+```
+rediss://default:AbCdEf123456@us1-bold-12345.upstash.io:12345
+```
+
+---
+
+## 🚢 Step 3: Deploy Backend to Render.com
+
+### 3.1 Create Render Account
+1. Go to https://render.com
+2. Sign up with GitHub
+3. Connect your GitHub account
+
+### 3.2 Create New Web Service
+1. Click **New +** → **Web Service**
+2. Connect repository: `neonflux-io/seka-svara-cp-for-server`
+3. Configure:
+   - **Name**: `seka-svara-cp-for-server`
+   - **Root Directory**: `backend/Seka-Svara-CP-For-Server`
+   - **Environment**: **Docker** (recommended) or **Node**
+   - **Region**: Choose closest to your users
+   - **Branch**: `main`
+   - **Instance Type**: Starter (or higher if needed)
+
+### 3.3 Configure Build & Start Commands
+
+**If using Docker (recommended):**
+- **Build Command**: (leave empty, Dockerfile handles it)
+- **Start Command**: (leave empty, Dockerfile CMD handles it)
+
+**If using Node:**
+- **Build Command**: `npm ci && npm run build`
+- **Start Command**: `npm run start:prod`
+
+### 3.4 Set Environment Variables
+
+Go to **Environment** tab and add:
+
+#### Required Variables:
+```env
+NODE_ENV=production
+PORT=8000
+DATABASE_URL=postgres://user:password@host:port/db?sslmode=require
+REDIS_URL=rediss://default:password@host:port
+JWT_SECRET=your-strong-random-secret-here
+DB_SYNCHRONIZE=false
+DB_LOGGING=false
+```
+
+#### Frontend CORS:
+```env
+CORS_ORIGINS=https://your-frontend.vercel.app,http://localhost:5173
+```
+Replace `your-frontend.vercel.app` with your actual Vercel frontend URL.
+
+#### Optional Variables (if you use them):
+```env
+BSC_RPC_URL=https://bsc-dataseed.binance.org/
+TRON_API_KEY=your-tron-api-key
+EMAIL_HOST=smtp.gmail.com
+EMAIL_PORT=587
+EMAIL_USER=your-email@gmail.com
+EMAIL_PASS=your-app-password
+```
+
+### 3.5 Configure Post-Deploy Migrations
+
+1. Go to **Settings** → **Build & Deploy**
+2. **Post-deploy Command**: `npm run migration:run`
+3. This runs database migrations automatically after each deploy
+
+### 3.6 Health Check
+
+1. Go to **Settings** → **Health Check Path**
+2. Set to: `/health`
+3. (If you don't have a health endpoint, create one - see below)
+
+### 3.7 Create Health Endpoint (if missing)
+
+Add to `src/app.controller.ts`:
+```typescript
+@Get('health')
+health() {
+  return { status: 'ok', timestamp: new Date().toISOString() };
+}
+```
+
+### 3.8 Deploy
+
+1. Click **Create Web Service**
+2. Render will:
+   - Clone your repo
+   - Build the Docker image (or run npm build)
+   - Start the service
+   - Run migrations (post-deploy)
+3. Watch the **Logs** tab for progress
+
+---
+
+## ✅ Step 4: Verify Deployment
+
+### 4.1 Check Logs
+- Go to **Logs** tab in Render dashboard
+- Look for:
+  - ✅ "Database connection established"
+  - ✅ "Server is running on: http://localhost:8000"
+  - ✅ No errors
+
+### 4.2 Test Endpoints
+
+**Health Check:**
+```bash
+curl https://your-service.onrender.com/health
+```
+
+**Swagger Documentation:**
+```
+https://your-service.onrender.com/api/docs
+```
+
+**API Base URL:**
+```
+https://your-service.onrender.com/api/v1
+```
+
+### 4.3 Update Frontend
+
+Update your frontend `.env` or config to point to Render backend:
+```env
+VITE_API_URL=https://your-service.onrender.com/api/v1
+VITE_WS_URL=wss://your-service.onrender.com
+```
+
+---
+
+## 🔄 Step 5: Continuous Deployment
+
+Render automatically deploys on every push to `main` branch.
+
+To deploy manually:
+1. Go to **Manual Deploy** tab
+2. Click **Deploy latest commit**
+
+---
+
+## 🛠️ Troubleshooting
+
+### Database Connection Issues
+
+**Problem**: "Connection refused" or "SSL required"
+- ✅ Verify `DATABASE_URL` includes `?sslmode=require`
+- ✅ Check Neon project is active (not suspended)
+- ✅ Verify connection string is correct
+
+**Problem**: "Migration failed"
+- ✅ Check `DATABASE_URL` is set correctly
+- ✅ Verify migrations folder exists: `src/database/migrations/`
+- ✅ Check logs for specific migration errors
+
+### Redis Connection Issues
+
+**Problem**: "Connection timeout"
+- ✅ Verify `REDIS_URL` uses `rediss://` (TLS) not `redis://`
+- ✅ Check Upstash dashboard for active connections
+- ✅ Verify password is correct
+
+### Build Issues
+
+**Problem**: "Build failed"
+- ✅ Check logs for specific npm/TypeScript errors
+- ✅ Verify `package.json` has correct scripts
+- ✅ Ensure all dependencies are in `dependencies` (not `devDependencies`) for production
+
+### CORS Issues
+
+**Problem**: Frontend can't connect to backend
+- ✅ Add frontend URL to `CORS_ORIGINS` env var
+- ✅ Verify format: `https://your-app.vercel.app,http://localhost:5173`
+- ✅ Check backend logs for CORS errors
+
+---
+
+## 📊 Monitoring & Scaling
+
+### Render Dashboard
+- **Metrics**: CPU, Memory, Requests
+- **Logs**: Real-time application logs
+- **Events**: Deploy history, errors
+
+### Neon Dashboard
+- **Queries**: Query performance
+- **Connections**: Active connections
+- **Storage**: Database size
+
+### Upstash Dashboard
+- **Commands**: Redis command stats
+- **Memory**: Memory usage
+- **Requests**: Request counts
+
+---
+
+## 🔐 Security Checklist
+
+- [ ] `JWT_SECRET` is a strong random string
+- [ ] `DB_SYNCHRONIZE=false` in production (use migrations)
+- [ ] CORS only allows your frontend domain
+- [ ] Database connection uses SSL (`sslmode=require`)
+- [ ] Redis connection uses TLS (`rediss://`)
+- [ ] No sensitive data in code (use env vars)
+- [ ] Health check endpoint exists
+
+---
+
+## 🎉 Success!
+
+Your backend is now live at:
+```
+https://your-service.onrender.com
+```
+
+API Documentation:
+```
+https://your-service.onrender.com/api/docs
+```
+
+---
+
+## 📞 Support
+
+- Render Docs: https://render.com/docs
+- Neon Docs: https://neon.tech/docs
+- Upstash Docs: https://docs.upstash.com
+
+---
+
+## 🚀 Next Steps
+
+1. Update frontend to use Render backend URL
+2. Test all API endpoints
+3. Set up monitoring/alerts
+4. Configure custom domain (optional)
+5. Set up staging environment (optional)
+

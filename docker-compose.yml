@@ -46,7 +46,7 @@ services:
       - JWT_EXPIRES_IN=7d
       - JWT_REFRESH_EXPIRES_IN=30d
       - API_PREFIX=api/v1
-      - FRONTEND_URL=http://localhost:5173
+      - FRONTEND_URL=https://seka-svara-cp.vercel.app/
     depends_on:
       - postgres
       - redis

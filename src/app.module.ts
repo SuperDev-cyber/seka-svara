@@ -46,14 +46,15 @@ import { AppController } from './app.controller';
       envFilePath: '.env',
     }),
 
-    // Database - Supports both DATABASE_URL (Neon/cloud) and individual vars (local)
+    // Database
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
       useFactory: (configService: ConfigService) => {
-        const databaseUrl = configService.get<string>('DATABASE_URL');
+        // Support DATABASE_URL (for Neon, Render Postgres, etc.) with fallback to individual vars
+        const databaseUrl = configService.get('DATABASE_URL');
         
-        // If DATABASE_URL is provided (Neon/cloud), use it directly
         if (databaseUrl) {
+          // Use DATABASE_URL (Neon format: postgres://user:pass@host:port/db?sslmode=require)
           return {
             type: 'postgres',
             url: databaseUrl,
@@ -74,24 +75,22 @@ import { AppController } from './app.controller';
               Tournament,
               TournamentPlayer,
             ],
-            synchronize: configService.get('NODE_ENV') !== 'production', // false in production
+            synchronize: configService.get('DB_SYNCHRONIZE') === 'true',
             logging: configService.get('DB_LOGGING') === 'true',
-            ssl: databaseUrl.includes('sslmode=require') 
-              ? { rejectUnauthorized: false } 
-              : configService.get('NODE_ENV') === 'production' 
+            ssl: databaseUrl.includes('sslmode=require') || databaseUrl.includes('neon.tech') 
               ? { rejectUnauthorized: false } 
               : false,
           };
         }
-
-        // Fallback to individual DB vars (local development)
+        
+        // Fallback to individual environment variables
         return {
           type: 'postgres',
-          host: configService.get('DB_HOST') || 'localhost',
-          port: parseInt(configService.get('DB_PORT') || '5432', 10),
-          username: configService.get('DB_USERNAME') || 'postgres',
-          password: configService.get('DB_PASSWORD') || 'postgres',
-          database: configService.get('DB_NAME') || 'seka_svara_db',
+          host: configService.get('DB_HOST'),
+          port: configService.get('DB_PORT'),
+          username: configService.get('DB_USERNAME'),
+          password: configService.get('DB_PASSWORD'),
+          database: configService.get('DB_NAME'),
           entities: [
             User,
             PlatformScoreTransaction,

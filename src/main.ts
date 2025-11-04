@@ -21,18 +21,23 @@ async function bootstrap() {
   app.use(compression());
   app.use(cookieParser());
 
-  // CORS for HTTP - Allow frontend domain and local development
-  const allowedOrigins = [
-    process.env.FRONTEND_URL, // Your Vercel frontend URL
-    'http://localhost:5173', // Vite dev server
-    'http://localhost:3000', // Alternative local dev
-    ...(process.env.NODE_ENV === 'development' ? ['*'] : []), // Allow all in dev
-  ].filter(Boolean); // Remove undefined values
-
+  // CORS for HTTP - Allow frontend and local development
+  const allowedOrigins = process.env.CORS_ORIGINS 
+    ? process.env.CORS_ORIGINS.split(',')
+    : ['http://localhost:5173', 'http://localhost:3000']; // Default Vite and React dev ports
+  
   app.enableCors({
-    origin: process.env.NODE_ENV === 'production' 
-      ? allowedOrigins.length > 0 ? allowedOrigins : true
-      : true, // Allow all in development
+    origin: (origin, callback) => {
+      // Allow requests with no origin (mobile apps, Postman, etc.)
+      if (!origin) return callback(null, true);
+      
+      // Check if origin is in allowed list
+      if (allowedOrigins.includes(origin) || process.env.NODE_ENV === 'development') {
+        callback(null, true);
+      } else {
+        callback(new Error('Not allowed by CORS'));
+      }
+    },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
