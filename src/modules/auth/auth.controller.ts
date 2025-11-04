@@ -1,4 +1,4 @@
-import { Controller, Post, Body, UseGuards, Request, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Post, Body, UseGuards, Request, HttpCode, HttpStatus, BadRequestException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
@@ -30,7 +30,12 @@ export class AuthController {
   @ApiResponse({ status: 200, description: 'Successfully logged in', type: AuthResponseDto })
   @ApiResponse({ status: 401, description: 'Unauthorized - invalid credentials' })
   async login(@Body() loginDto: LoginDto, @Request() req): Promise<AuthResponseDto> {
-    return this.authService.login(req.user);
+    try {
+      return await this.authService.login(req.user);
+    } catch (error) {
+      console.error('Login error:', error);
+      throw error;
+    }
   }
 
   @Post('refresh')
@@ -86,7 +91,15 @@ export class AuthController {
   @ApiResponse({ status: 200, description: 'Google authentication successful', type: AuthResponseDto })
   @ApiResponse({ status: 400, description: 'Bad request - invalid token' })
   async verifyGoogleToken(@Body() body: { idToken: string }): Promise<AuthResponseDto> {
-    return this.authService.verifyGoogleToken(body.idToken);
+    try {
+      if (!body || !body.idToken) {
+        throw new BadRequestException('idToken is required');
+      }
+      return await this.authService.verifyGoogleToken(body.idToken);
+    } catch (error) {
+      console.error('Google verify error:', error);
+      throw error;
+    }
   }
 }
 
