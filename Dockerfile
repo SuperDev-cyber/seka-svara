@@ -10,11 +10,12 @@ RUN npm config set fetch-retries 10 && \
     npm config set fetch-retry-maxtimeout 600000
 
 COPY package*.json ./
-# Use npm install with cache clean to avoid integrity errors
+# Install ALL dependencies (including devDependencies for build tools like @nestjs/cli)
 RUN npm cache clean --force && \
     npm install --no-audit --no-fund
 
 COPY . .
+# Build the application (nest CLI is now available from node_modules/.bin)
 RUN npm run build
 
 # Production stage

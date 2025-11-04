@@ -5,8 +5,6 @@ services:
     plan: starter
     autoDeploy: true
     healthCheckPath: /health
-    buildCommand: npm ci && npm run build
-    startCommand: npm run migration:run && npm run start:prod
     envVars:
       - key: NODE_ENV
         value: production
