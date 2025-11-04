@@ -37,8 +37,54 @@ postgres://neondb_owner:AbCdEf123456@ep-cool-darkness-123456.us-east-2.aws.neon.
 ```
 
 ### 1.3 (Optional) Test Connection Locally
-```bash
-psql "postgres://user:password@host:port/db?sslmode=require"
+
+**Option A: Using a GUI Tool (Recommended for Windows)**
+1. Download and install [DBeaver](https://dbeaver.io/download/) (free, cross-platform)
+2. Open DBeaver → New Database Connection
+3. Select **PostgreSQL**
+4. Paste your connection string in the **URL** field:
+   ```
+   postgresql://neondb_owner:npg_X5GFVMD6grQH@ep-crimson-mud-ahyc8cbg-pooler.c-3.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require
+   ```
+5. Click **Test Connection** → Should show "Connected"
+
+**Option B: Using Node.js Script**
+Create `test-connection.js` in your backend folder:
+```javascript
+const { Client } = require('pg');
+
+const client = new Client({
+  connectionString: 'postgresql://neondb_owner:npg_X5GFVMD6grQH@ep-crimson-mud-ahyc8cbg-pooler.c-3.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require'
+});
+
+client.connect()
+  .then(() => {
+    console.log('✅ Connected to Neon database!');
+    return client.query('SELECT NOW()');
+  })
+  .then((res) => {
+    console.log('Current time:', res.rows[0].now);
+    client.end();
+  })
+  .catch((err) => {
+    console.error('❌ Connection error:', err);
+    client.end();
+  });
+```
+
+Run: `node test-connection.js`
+
+**Option C: Install PostgreSQL Client on Windows**
+1. Download PostgreSQL from https://www.postgresql.org/download/windows/
+2. Install (includes `psql` command-line tool)
+3. Open PowerShell and run:
+   ```powershell
+   psql "postgresql://neondb_owner:npg_X5GFVMD6grQH@ep-crimson-mud-ahyc8cbg-pooler.c-3.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
+   ```
+
+**Option D: Using Docker (if you have Docker installed)**
+```powershell
+docker run -it --rm postgres psql "postgresql://neondb_owner:npg_X5GFVMD6grQH@ep-crimson-mud-ahyc8cbg-pooler.c-3.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
 ```
 
 ---
