@@ -35,8 +35,14 @@ RUN npm cache clean --force && \
     npm install --only=production --no-audit --no-fund
 
 COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/package*.json ./
+COPY --from=builder /app/start.sh ./start.sh
+
+# Make startup script executable
+RUN chmod +x start.sh
 
 EXPOSE 8000
 
-CMD ["node", "dist/main"]
+# Run migrations then start server
+CMD ["./start.sh"]
 
