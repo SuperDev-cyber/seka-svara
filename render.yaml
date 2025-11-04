@@ -25,5 +25,4 @@ services:
         value: "false"  # Always use migrations in production
       - key: DB_LOGGING
         value: "false"  # Disable query logging in production
-    postDeployCommand: npm run migration:run
 
