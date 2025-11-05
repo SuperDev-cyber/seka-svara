@@ -243,7 +243,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
           currentPlayers: 1,
           isPrivate,
         } as any)
-      ) as GameTable;
+      ) as unknown as GameTable;
 
       // 2) Auto-join inviter (table_players unique constraint prevents duplicates)
       try {
