@@ -1025,101 +1025,56 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   /**
-   * Get all active tables (IN-MEMORY)
-   * Also cleans up stale empty tables
+   * Get all active tables (DATABASE-FIRST)
+   * - Returns only tables that exist in DB
+   * - Automatically deletes DB rows with 0 participants
    */
   @SubscribeMessage('get_active_tables')
-  handleGetActiveTables(
+  async handleGetActiveTables(
     @ConnectedSocket() client: Socket,
     @MessageBody() data?: { userId?: string },
   ) {
-    const requestingUserId = data?.userId;
     this.logger.log(`📋 GET_ACTIVE_TABLES request from client ${client.id}`);
-    this.logger.log(`   Requesting User ID: ${requestingUserId || 'anonymous'}`);
-    this.logger.log(`   Total tables in memory: ${this.activeTables.size}`);
-    
-    // Debug: Log all table IDs
-    if (this.activeTables.size > 0) {
-      const tableIds = Array.from(this.activeTables.keys());
-      this.logger.log(`   📝 Table IDs: ${JSON.stringify(tableIds)}`);
-      Array.from(this.activeTables.values()).forEach(t => {
-        this.logger.log(`   🎮 Table: ${t.tableName} | Status: ${t.status} | Players: ${t.players.length}`);
-      });
-    } else {
-      this.logger.log(`   ⚠️ activeTables Map is EMPTY!`);
-    }
-    
-    // Clean up empty tables older than 2 minutes
-    const now = new Date().getTime();
-    const staleTableIds: string[] = [];
-    
-    for (const [tableId, table] of this.activeTables.entries()) {
-      const ageMinutes = (now - table.createdAt.getTime()) / 1000 / 60;
-      
-      if (table.players.length === 0 && ageMinutes > 2) {
-        staleTableIds.push(tableId);
-        this.logger.log(`   🗑️ Removing stale empty table: ${table.tableName} (age: ${ageMinutes.toFixed(1)} min)`);
+
+    // 1) Hard cleanup in DB: delete rows with zero participants
+    try {
+      const empties = await this.gameTablesRepository
+        .createQueryBuilder('t')
+        .select(['t.id'])
+        .where('t.currentPlayers = :zero', { zero: 0 })
+        .getMany();
+      for (const t of empties) {
+        await this.gameTablesRepository.delete(t.id);
+        this.server.to('lobby').emit('table_removed', { id: t.id, timestamp: new Date(), reason: 'no_participants' });
       }
+    } catch (e) {
+      this.logger.error(`❌ Failed DB empty-table cleanup: ${e.message}`);
     }
-    
-    // Delete stale tables
-    for (const tableId of staleTableIds) {
-      this.activeTables.delete(tableId);
-      
-      // Broadcast removal
-      this.server.to('lobby').emit('table_removed', {
-        id: tableId,
-        timestamp: new Date(),
-      });
-    }
-    
-    // ✅ Filter tables based on privacy:
-    // - PUBLIC tables: visible to everyone
-    // - PRIVATE tables: only visible to creator and invited players
-    const tables = Array.from(this.activeTables.values())
-      .filter((table: any) => {
-        // Public tables are always visible
-        if (!table.isPrivate) {
-          return true;
-        }
-        
-        // Private tables: only show if user is creator or invited
-        if (requestingUserId) {
-          const isCreator = table.creatorId === requestingUserId;
-          const isInvited = table.invitedPlayers?.includes(requestingUserId);
-          const isAlreadyInTable = table.players.some(p => p.userId === requestingUserId);
-          
-          if (isCreator || isInvited || isAlreadyInTable) {
-            this.logger.log(`   🔒 Including private table "${table.tableName}" for user ${requestingUserId}`);
-            return true;
-          }
-        }
-        
-        // Hide private table from this user
-        this.logger.log(`   🔒 Hiding private table "${table.tableName}" from user`);
-        return false;
-      })
-      .map((table: any) => ({
-        id: table.id,
-        tableName: table.tableName,
-        entryFee: table.entryFee,
-        currentPlayers: table.players.length,
-        maxPlayers: table.maxPlayers,
-        status: table.status,
-        privacy: table.privacy,
-        isPrivate: table.isPrivate,
-        creatorId: table.creatorId,
-      }));
-    
-    this.logger.log(`   Returning ${tables.length} tables to client`);
-    if (tables.length > 0) {
-      this.logger.log(`   Tables: ${JSON.stringify(tables.map(t => ({ id: t.id, name: t.tableName })))}`);
-    }
-    
-    return {
-      success: true,
-      tables: tables,
-    };
+
+    // 2) Return tables from DB only (currentPlayers > 0)
+    const dbTables = await this.gameTablesRepository
+      .createQueryBuilder('t')
+      .where('t.currentPlayers > 0')
+      .orderBy('t.createdAt', 'DESC')
+      .getMany();
+
+    const payload = dbTables.map(t => ({
+      id: t.id,
+      tableName: t.name,
+      entryFee: Number(t.buyInAmount || 0),
+      currentPlayers: t.currentPlayers,
+      maxPlayers: t.maxPlayers,
+      status: t.status,
+      privacy: t.isPrivate ? 'private' : 'public',
+      isPrivate: t.isPrivate,
+      creatorId: t.creatorId,
+      network: t.network,
+      createdAt: t.createdAt,
+    }));
+
+    this.logger.log(`   Returning ${payload.length} DB tables`);
+    client.emit('active_tables', payload);
+    return { success: true, tables: payload };
   }
 
   /**
