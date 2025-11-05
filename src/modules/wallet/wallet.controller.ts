@@ -41,7 +41,19 @@ export class WalletController {
   @Post('deposit')
   @ApiOperation({ summary: 'Process deposit' })
   async deposit(@Request() req, @Body() depositDto: DepositDto) {
-    return this.walletService.processDeposit(req.user.id, depositDto);
+    try {
+      console.log('💰 Deposit request received:', {
+        userId: req.user.id,
+        amount: depositDto.amount,
+        network: depositDto.network,
+        txHash: depositDto.txHash,
+      });
+      return await this.walletService.processDeposit(req.user.id, depositDto);
+    } catch (error) {
+      console.error('❌ Deposit error:', error);
+      console.error('Error stack:', error.stack);
+      throw error;
+    }
   }
 
   @Post('withdraw')
