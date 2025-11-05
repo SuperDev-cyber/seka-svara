@@ -2102,7 +2102,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
     
     // Check if already in table (allow rejoining - just update info)
-    const existingPlayer = table.players.find(p => p.userId === data.userId);
+    const existingPlayer: any = table.players.find((p: any) => p.userId === data.userId);
     if (existingPlayer) {
       this.logger.log(`🔄 Player ${data.userEmail} already in table ${table.tableName} - rejoin allowed`);
       this.logger.log(`   Current table state: ${table.players.length} players`);
