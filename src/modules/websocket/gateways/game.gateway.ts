@@ -276,7 +276,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
               maxBet: entryFee,
               minPlayers: 2,
               maxPlayers,
-              currentPlayers: 1,
+              currentPlayers: 0, // ✅ FIX: Start with 0 players (inviter hasn't joined yet)
               isPrivate,
             } as any)
           ) as unknown as GameTable;
@@ -297,22 +297,16 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
             maxBet: entryFee,
             minPlayers: 2,
             maxPlayers,
-            currentPlayers: 1,
+            currentPlayers: 0, // ✅ FIX: Start with 0 players (inviter hasn't joined yet)
             isPrivate,
           } as any)
         ) as unknown as GameTable;
         this.logger.log(`✅ Created new table: ${dbTable.id}`);
       }
 
-      // 2) Auto-join inviter (table_players unique constraint prevents duplicates)
-      try {
-        await this.gameTablesRepository.query(
-          `INSERT INTO table_players (id, "tableId", "userId", "seatNumber", chips, "isReady", status, "joinedAt")
-           VALUES (uuid_generate_v4(), $1, $2, $3, $4, $5, $6, NOW())
-           ON CONFLICT DO NOTHING`,
-          [dbTable.id, data.creator.userId, 0, 0, false, 'active'],
-        );
-      } catch {}
+      // 2) ✅ REMOVED: Do NOT auto-join inviter - they must click "JOIN TABLE" button
+      // Inviter will be added to table_players only when they call join_table
+      this.logger.log(`📋 Table created - inviter NOT auto-joined (must click JOIN TABLE)`);
 
       // 3) Create invitation row
       const invite = this.invitationsRepository.create({
