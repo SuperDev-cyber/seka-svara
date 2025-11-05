@@ -138,8 +138,8 @@ import { AppController } from './app.controller';
     LeaderboardModule,
     EmailModule,
 
-    // Feature Modules - Developer 3 (temporarily disabled for testing)
-    // BlockchainModule,
+    // Feature Modules - Developer 3
+    BlockchainModule, // Required by WalletModule
     WalletModule,
     // TransactionsModule,
     // NftModule,
