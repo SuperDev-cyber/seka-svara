@@ -23,18 +23,44 @@ async function bootstrap() {
 
   // CORS for HTTP - Allow frontend and local development
   const allowedOrigins = process.env.CORS_ORIGINS 
-    ? process.env.CORS_ORIGINS.split(',')
+    ? process.env.CORS_ORIGINS.split(',').map(o => o.trim())
     : ['http://localhost:5173', 'http://localhost:3000']; // Default Vite and React dev ports
+  
+  console.log('🌐 CORS Configuration:', {
+    allowedOrigins,
+    nodeEnv: process.env.NODE_ENV,
+    corsOriginsEnv: process.env.CORS_ORIGINS
+  });
   
   app.enableCors({
     origin: (origin, callback) => {
       // Allow requests with no origin (mobile apps, Postman, etc.)
-      if (!origin) return callback(null, true);
+      if (!origin) {
+        console.log('🌐 CORS: Allowing request with no origin');
+        return callback(null, true);
+      }
       
       // Check if origin is in allowed list
-      if (allowedOrigins.includes(origin) || process.env.NODE_ENV === 'development') {
+      if (allowedOrigins.includes(origin)) {
+        console.log('✅ CORS: Allowing origin:', origin);
         callback(null, true);
-      } else {
+      } 
+      // Allow Vercel preview deployments (seka-svara-*-*.vercel.app pattern)
+      else if (origin.includes('vercel.app') && (
+        origin.includes('seka-svara') || 
+        origin.includes('seka-svara-cp') ||
+        origin.includes('seka-svara-frontend')
+      )) {
+        console.log('✅ CORS: Allowing Vercel deployment:', origin);
+        callback(null, true);
+      }
+      // Allow in development mode
+      else if (process.env.NODE_ENV === 'development') {
+        console.log('⚠️ CORS: Allowing in development mode:', origin);
+        callback(null, true);
+      } 
+      else {
+        console.error('❌ CORS: Blocking origin:', origin);
         callback(new Error('Not allowed by CORS'));
       }
     },
