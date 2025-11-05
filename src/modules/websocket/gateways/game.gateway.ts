@@ -2436,6 +2436,36 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     } catch (error) {
       this.logger.error(`❌ Error auto-starting game: ${error.message}`, error.stack);
       table.status = 'waiting'; // Revert status on error
+      
+      // ✅ FIX: Notify players that game failed to start
+      this.server.to(`table:${table.id}`).emit('game_start_failed', {
+        tableId: table.id,
+        tableName: table.tableName,
+        message: 'Failed to start game. Please try again or contact support.',
+        error: error.message,
+        timestamp: new Date(),
+      });
+      
+      // Update table status in database
+      try {
+        await this.gameTablesRepository.update(table.id, {
+          status: 'waiting',
+        });
+        this.logger.log(`💾 ✅ Database updated: Table ${table.id} status reverted to 'waiting'`);
+      } catch (dbError) {
+        this.logger.error(`❌ Failed to revert table status in database: ${dbError.message}`);
+      }
+      
+      // Broadcast table update to lobby
+      this.server.to('lobby').emit('table_updated', {
+        id: table.id,
+        tableName: table.tableName,
+        entryFee: table.entryFee,
+        currentPlayers: table.players.length,
+        maxPlayers: table.maxPlayers,
+        status: 'waiting',
+        timestamp: new Date(),
+      });
     }
   }
 
