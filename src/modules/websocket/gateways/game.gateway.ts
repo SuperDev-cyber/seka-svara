@@ -64,6 +64,9 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
   
   // Map: tableId -> countdown timer (prevents multiple timers for same table)
   private countdownTimers = new Map<string, NodeJS.Timeout>();
+  
+  // Map: tableId -> cleanup timer for single-player tables
+  private cleanupTimers = new Map<string, NodeJS.Timeout>();
 
   // IN-MEMORY TABLE STORE (ephemeral - lost on restart)
   private activeTables = new Map<string, {
@@ -1799,6 +1802,43 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   /**
+   * Get user's current table (for auto-redirect)
+   */
+  @SubscribeMessage('get_user_current_table')
+  handleGetUserCurrentTable(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { userId: string },
+  ) {
+    this.logger.log(`🔍 Checking if user ${data.userId} is in a table...`);
+    
+    for (const [tableId, table] of this.activeTables.entries()) {
+      const playerInTable = table.players.find(p => p.userId === data.userId);
+      if (playerInTable) {
+        this.logger.log(`✅ User is in table: ${tableId} (${table.tableName})`);
+        return {
+          success: true,
+          inTable: true,
+          table: {
+            id: tableId,
+            tableName: table.tableName,
+            entryFee: table.entryFee,
+            players: table.players.length,
+            maxPlayers: table.maxPlayers,
+            status: table.status,
+          }
+        };
+      }
+    }
+    
+    this.logger.log(`❌ User is not in any table`);
+    return {
+      success: true,
+      inTable: false,
+      table: null
+    };
+  }
+
+  /**
    * Join table (IN-MEMORY) - Allows rejoining if previously left
    */
   @SubscribeMessage('join_table')
@@ -1814,7 +1854,60 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       entryFee?: number;
     },
   ) {
+    // 1️⃣ Check if player is already in ANOTHER table
+    for (const [tableId, existingTable] of this.activeTables.entries()) {
+      const playerInTable = existingTable.players.find(p => p.userId === data.userId);
+      if (playerInTable && tableId !== data.tableId) {
+        this.logger.log(`⚠️ Player ${data.userEmail} is already in table ${tableId}, redirecting...`);
+        return {
+          success: false,
+          message: 'You are already in another table',
+          redirect: tableId,
+          currentTable: {
+            id: tableId,
+            tableName: existingTable.tableName,
+            entryFee: existingTable.entryFee,
+            players: existingTable.players.length,
+            maxPlayers: existingTable.maxPlayers,
+          }
+        };
+      }
+    }
+
     let table = this.activeTables.get(data.tableId);
+    
+    // 2️⃣ If table not in memory, try loading from database
+    if (!table) {
+      this.logger.log(`🔍 Table ${data.tableId} not in memory, checking database...`);
+      try {
+        const dbTable = await this.gameTablesRepository.findOne({ 
+          where: { id: data.tableId },
+          relations: ['players']
+        });
+        
+        if (dbTable && dbTable.status === 'waiting') {
+          this.logger.log(`✅ Found table in database, loading into memory...`);
+          // Load table into memory
+          table = {
+            id: dbTable.id,
+            tableName: dbTable.name,
+            entryFee: Number(dbTable.buyInAmount),
+            maxPlayers: dbTable.maxPlayers,
+            players: [], // Will be populated as players join
+            status: 'waiting' as const,
+            creatorId: dbTable.creatorId,
+            createdAt: new Date(dbTable.createdAt),
+            singlePlayerSince: new Date(),
+            gameId: null,
+            lastWinnerId: null,
+            lastHeartbeat: new Date()
+          };
+          this.activeTables.set(data.tableId, table);
+        }
+      } catch (error) {
+        this.logger.error(`❌ Error loading table from database: ${error.message}`);
+      }
+    }
     
     // If table doesn't exist and it's a "pending" table from invitation, create it automatically
     if (!table && data.tableId.startsWith('pending-')) {
@@ -2022,10 +2115,52 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       this.logger.log(`   👑 Creator joined`);
     }
     
-    // CLEAR idle timeout if table had 1 player (now has 2+)
-    if (table.players.length === 2 && table.singlePlayerSince) {
-      this.logger.log(`   ⏰ Clearing idle timeout - table now has ${table.players.length} players`);
+    // 3️⃣ Single player cleanup timer management
+    if (table.players.length === 1) {
+      // Start 20-second cleanup timer for single-player table
+      this.logger.log(`⏱️ Starting 20-second cleanup timer for single-player table ${table.tableName}`);
+      table.singlePlayerSince = new Date();
+      
+      const cleanupTimer = setTimeout(() => {
+        const currentTable = this.activeTables.get(data.tableId);
+        if (currentTable && currentTable.players.length === 1) {
+          this.logger.log(`🗑️ Auto-cleaning up table ${table.tableName} - only 1 player after 20 seconds`);
+          
+          // Notify the single player
+          this.server.to(`table:${data.tableId}`).emit('table_cleanup', {
+            message: 'Table closed - no other players joined',
+            tableId: data.tableId,
+          });
+          
+          // Remove from memory
+          this.activeTables.delete(data.tableId);
+          
+          // Mark as finished in database
+          this.gameTablesRepository.update(data.tableId, { 
+            status: 'finished',
+            currentPlayers: 0
+          });
+          
+          // Broadcast to lobby
+          this.server.to('lobby').emit('table_removed', { tableId: data.tableId });
+        }
+      }, 20000); // 20 seconds
+      
+      // Store cleanup timer (if you have a Map for it)
+      if (!this.cleanupTimers) {
+        this.cleanupTimers = new Map();
+      }
+      this.cleanupTimers.set(data.tableId, cleanupTimer);
+    } else if (table.players.length === 2 && table.singlePlayerSince) {
+      // CLEAR idle timeout if table had 1 player (now has 2+)
+      this.logger.log(`   ⏰ Clearing cleanup timeout - table now has ${table.players.length} players`);
       table.singlePlayerSince = null;
+      
+      // Cancel cleanup timer
+      if (this.cleanupTimers && this.cleanupTimers.has(data.tableId)) {
+        clearTimeout(this.cleanupTimers.get(data.tableId));
+        this.cleanupTimers.delete(data.tableId);
+      }
     }
     
     // Broadcast update to lobby AND to players in the table
