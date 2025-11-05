@@ -233,15 +233,37 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       this.connectedPlayers.delete(client.id);
       this.logger.log(`Removed user ${userId} from socket mapping`);
       
-      // DON'T auto-remove from tables on disconnect
-      // This prevents issues when players navigate between pages (causes brief disconnect)
-      // Players are only removed via explicit 'leave_table' or by 1-minute idle cleanup
-      
-      // Just log which tables the user is still in
+      // Auto-remove from WAITING tables on disconnect to keep counts correct
       for (const [tableId, table] of this.activeTables.entries()) {
-        if (table.players.some(p => p.userId === userId)) {
-          this.logger.log(`   📋 User ${userId} still in table: ${table.tableName} (${table.players.length}/${table.maxPlayers} players, status: ${table.status})`);
-          this.logger.log(`   ℹ️ Player will remain in table (use 'leave_table' to remove or wait for 1-min idle timeout)`);
+        if (table.players.some(p => p.userId === userId) && table.status === 'waiting') {
+          const before = table.players.length;
+          table.players = table.players.filter(p => p.userId !== userId);
+          const after = table.players.length;
+          if (after !== before) {
+            this.logger.log(`   👋 Removed ${userId} from waiting table ${table.tableName} on disconnect (${after}/${table.maxPlayers})`);
+            // Update DB count
+            try {
+              await this.gameTablesRepository.update(table.id, { currentPlayers: after });
+            } catch (err) {
+              this.logger.error(`   ❌ Failed updating DB player count: ${err.message}`);
+            }
+            // Delete table if empty
+            if (after === 0) {
+              this.activeTables.delete(tableId);
+              try { await this.gameTablesRepository.delete(tableId); } catch {}
+              this.server.to('lobby').emit('table_removed', { id: tableId, timestamp: new Date(), reason: 'all_players_left' });
+            } else {
+              this.server.to('lobby').emit('table_updated', {
+                id: table.id,
+                tableName: table.tableName,
+                entryFee: table.entryFee,
+                currentPlayers: table.players.length,
+                maxPlayers: table.maxPlayers,
+                status: table.status,
+                timestamp: new Date(),
+              });
+            }
+          }
         }
       }
       
