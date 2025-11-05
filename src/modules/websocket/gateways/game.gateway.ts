@@ -108,16 +108,16 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   /**
    * Start periodic cleanup of idle single-player tables
-   * Runs every 30 seconds, deletes tables with 1 player idle for 1+ minute
+   * Runs every 30 seconds, deletes tables with 1 player idle for 20+ seconds
    */
   private startIdleTableCleanup() {
     if (this.cleanupInterval) return; // Already running
 
-    this.logger.log('🧹 Starting idle single-player table cleanup (checks every 30 seconds)');
+    this.logger.log('🧹 Starting idle single-player table cleanup (checks every 30 seconds, removes after 20 seconds idle)');
     
     this.cleanupInterval = setInterval(async () => {
       const now = new Date().getTime();
-      const ONE_MINUTE = 1 * 60 * 1000; // 1 minute in milliseconds
+      const TWENTY_SECONDS = 20 * 1000; // 20 seconds in milliseconds
       const HEARTBEAT_TIMEOUT = 30 * 1000; // 30 seconds for heartbeat timeout
       const tablesToDelete: string[] = [];
 
@@ -133,14 +133,23 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
           }
         }
         
-        // Only check tables with exactly 1 player
-        if (table.players.length === 1 && table.singlePlayerSince) {
-          const idleTime = now - table.singlePlayerSince.getTime();
-          
-          if (idleTime >= ONE_MINUTE) {
-            this.logger.log(`⏱️ Table "${table.tableName}" has been idle with 1 player for ${Math.round(idleTime / 1000)} seconds`);
-            tablesToDelete.push(tableId);
+        // Only check tables with exactly 1 player (CHANGED: from 1 minute to 20 seconds)
+        if (table.players.length === 1) {
+          // If singlePlayerSince is not set, set it now (for old tables)
+          if (!table.singlePlayerSince) {
+            table.singlePlayerSince = new Date();
+            this.logger.log(`⏱️ Setting idle timer for existing single-player table: ${table.tableName}`);
+          } else {
+            const idleTime = now - table.singlePlayerSince.getTime();
+            
+            if (idleTime >= TWENTY_SECONDS) {
+              this.logger.log(`⏱️ Table "${table.tableName}" has been idle with 1 player for ${Math.round(idleTime / 1000)} seconds`);
+              tablesToDelete.push(tableId);
+            }
           }
+        } else if (table.players.length > 1 && table.singlePlayerSince) {
+          // If table now has multiple players, clear the idle timer
+          table.singlePlayerSince = null;
         }
       }
 
@@ -1101,6 +1110,38 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.logger.log(`   Creator ${data.creatorEmail} automatically joined the table`);
     this.logger.log(`   Total tables in memory: ${this.activeTables.size}`);
     this.logger.log(`   Online users in lobby: ${this.onlineUsers.size}`);
+    
+    // 🆕 Start 20-second cleanup timer for single-player table
+    this.logger.log(`⏱️ Starting 20-second cleanup timer for newly created table ${data.tableName}`);
+    newTable.singlePlayerSince = new Date();
+    
+    const cleanupTimer = setTimeout(() => {
+      const currentTable = this.activeTables.get(tableId);
+      if (currentTable && currentTable.players.length === 1) {
+        this.logger.log(`🗑️ Auto-cleaning up table ${data.tableName} - only 1 player after 20 seconds`);
+        
+        // Notify the single player
+        this.server.to(`table:${tableId}`).emit('table_cleanup', {
+          message: 'Table closed - no other players joined',
+          tableId: tableId,
+        });
+        
+        // Remove from memory
+        this.activeTables.delete(tableId);
+        
+        // Mark as finished in database
+        this.gameTablesRepository.update(tableId, { 
+          status: 'finished',
+          currentPlayers: 0
+        });
+        
+        // Broadcast to lobby
+        this.server.to('lobby').emit('table_removed', { tableId: tableId });
+      }
+    }, 20000); // 20 seconds
+    
+    // Store cleanup timer
+    this.cleanupTimers.set(tableId, cleanupTimer);
     
     // Create table broadcast payload
     const tableCreatedPayload = {
