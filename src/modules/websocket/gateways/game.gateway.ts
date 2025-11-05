@@ -1952,7 +1952,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
           this.logger.log(`   Database has ${dbTable.players?.length || 0} players`);
           
           // ✅ FIX: Load existing players from database
-          const existingPlayers = [];
+          const existingPlayers: any[] = [];
           if (dbTable.players && dbTable.players.length > 0) {
             for (const dbPlayer of dbTable.players) {
               try {
@@ -1963,7 +1963,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
                   existingPlayers.push({
                     userId: dbPlayer.userId,
                     email: user.email,
-                    username: user.name || user.email?.split('@')[0] || 'Player',
+                    username: user.username || user.email?.split('@')[0] || 'Player',
                     avatar: user.avatar || null,
                     balance: playerBalance,
                     isActive: dbPlayer.status === 'active',
@@ -1984,18 +1984,18 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
             tableName: dbTable.name,
             entryFee: Number(dbTable.buyInAmount),
             maxPlayers: dbTable.maxPlayers,
-            players: existingPlayers, // ✅ FIX: Use loaded players instead of empty array
+            players: existingPlayers as any, // ✅ FIX: Use loaded players instead of empty array
             status: 'waiting' as const,
             privacy: dbTable.isPrivate ? 'private' : 'public',
             isPrivate: dbTable.isPrivate,
             invitedPlayers: [] as string[],
             creatorId: dbTable.creatorId,
             createdAt: new Date(dbTable.createdAt),
-            singlePlayerSince: existingPlayers.length === 1 ? new Date() : null, // Start cleanup timer if only 1 player
+            singlePlayerSince: existingPlayers.length === 1 ? new Date() : (null as Date | null), // Start cleanup timer if only 1 player
             gameId: null as string | null,
             lastWinnerId: null as string | null,
             lastHeartbeat: new Date()
-          };
+          } as any;
           this.activeTables.set(data.tableId, table);
           this.logger.log(`✅ Table loaded with ${existingPlayers.length} player(s)`);
         }
@@ -2122,14 +2122,14 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       this.logger.log(`🎮 Client ${client.id} rejoined game room: ${gameRoom}`);
       
       // ✅ Log all players in table for debugging
-      for (const p of table.players) {
-        this.logger.log(`   Player: ${p.email}, socketId: ${p.socketId}, connected: ${p.socketId ? 'YES' : 'NO'}`);
+      for (const p of table.players as any[]) {
+        this.logger.log(`   Player: ${p.email}, socketId: ${p.socketId || 'null'}, connected: ${p.socketId ? 'YES' : 'NO'}`);
       }
       
       // ✅ Broadcast updated player list to all players in table (critical for syncing)
       this.server.to(`table:${table.id}`).emit('player_list_updated', {
         tableId: table.id,
-        players: table.players.map(p => ({
+        players: table.players.map((p: any) => ({
           userId: p.userId,
           email: p.email,
           username: p.username,
