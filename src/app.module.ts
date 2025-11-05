@@ -26,6 +26,7 @@ import { Game } from './modules/game/entities/game.entity';
 import { GamePlayer } from './modules/game/entities/game-player.entity';
 import { GameTable } from './modules/tables/entities/game-table.entity';
 import { TablePlayer } from './modules/tables/entities/table-player.entity';
+import { Invitation } from './modules/tables/entities/invitation.entity';
 import { Notification } from './modules/notifications/entities/notification.entity';
 import { Wallet } from './modules/wallet/entities/wallet.entity';
 import { WalletTransaction } from './modules/wallet/entities/wallet-transaction.entity';
@@ -65,6 +66,7 @@ import { AppController } from './app.controller';
               GamePlayer,
               GameTable,
               TablePlayer,
+              Invitation,
               Notification,
               Wallet,
               WalletTransaction,
@@ -98,6 +100,7 @@ import { AppController } from './app.controller';
           GamePlayer,
           GameTable,
           TablePlayer,
+          Invitation,
           Notification,
           Wallet,
           WalletTransaction,
