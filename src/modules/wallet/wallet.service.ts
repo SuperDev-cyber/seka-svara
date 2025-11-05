@@ -374,9 +374,6 @@ export class WalletService {
     // 1. Update SEKA Balance (locked funds in ecosystem)
     user.balance = oldBalance + depositAmount;
     
-    // 2. Update Seka-Svara Score (management tracking) - MIRRORS SEKA BALANCE
-    user.platformScore = oldPlatformScore + depositAmount;
-    
     // Also update wallet balance for consistency (though games use user.balance)
     wallet.balance = Number(wallet.balance) + depositAmount;
     wallet.availableBalance = Number(wallet.availableBalance) + depositAmount;
@@ -386,7 +383,8 @@ export class WalletService {
     await this.walletsRepository.save(wallet);
     await this.usersRepository.save(user);
     
-    // 3. Create Seka-Svara Score Transaction Record
+    // 2. Update Seka-Svara Score (management tracking) - MIRRORS SEKA BALANCE
+    // Let platformScoreService.addScore handle the platformScore update to ensure correct transaction record
     await this.platformScoreService.addScore(
       user.id,
       depositAmount,
@@ -395,6 +393,12 @@ export class WalletService {
       transaction.id,
       'wallet_deposit'
     );
+    
+    // Refresh user to get updated platformScore
+    const updatedUser = await this.usersRepository.findOne({ where: { id: user.id } });
+    if (updatedUser) {
+      user.platformScore = updatedUser.platformScore;
+    }
     
     this.logger.log(`💳 SEKA Balance After: ${user.balance} SEKA`);
     this.logger.log(`🏆 Seka-Svara Score After: ${user.platformScore}`);
