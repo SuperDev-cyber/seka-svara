@@ -78,11 +78,11 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       userId: string; 
       email: string; 
       username?: string; 
-      avatar?: string;
+      avatar?: string | null;  // ✅ Allow null to match database type
       balance?: number;
       isActive?: boolean;
       joinedAt?: Date;
-      socketId?: string;
+      socketId?: string | null; // ✅ Allow null for disconnected players
     }>;
     status: 'waiting' | 'in_progress' | 'finished';
     privacy?: string;
@@ -1969,10 +1969,10 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
             email: string; 
             username?: string; 
             avatar?: string | null;
-            balance: number;
-            isActive: boolean;
-            joinedAt: Date;
-            socketId: string | null;
+            balance?: number;
+            isActive?: boolean;
+            joinedAt?: Date;
+            socketId?: string | null;
           }> = [];
           if (dbTable.players && dbTable.players.length > 0) {
             for (const dbPlayer of dbTable.players) {
@@ -2114,6 +2114,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       };
     }
     
+    // ✅ TypeScript type guard: ensure table exists
     if (!table) {
       this.logger.log(`❌ Join failed: Table ${data.tableId} not found`);
       return {
