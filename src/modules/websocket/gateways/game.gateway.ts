@@ -208,24 +208,6 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       timestamp: new Date(),
     });
   }
-  /**
-   * Online users list (normalized to lowercase emails)
-   */
-  @SubscribeMessage('get_online_users')
-  handleGetOnlineUsers(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data?: any,
-  ) {
-    const users = Array.from(this.userData.values()).map(u => ({
-      userId: u.userId,
-      username: u.username || (u.email ? u.email.split('@')[0] : 'Player'),
-      email: (u.email || '').toLowerCase(),
-      avatar: u.avatar,
-      isOnline: true,
-    }));
-    client.emit('online_users', users);
-    return { success: true, onlineUsers: users };
-  }
 
   /**
    * Send invitation request (DB-first) and auto-join inviter
@@ -247,20 +229,21 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       const network = data.tableSettings.network || 'BEP20';
       const isPrivate = !!data.tableSettings.isPrivate;
 
-      const dbTable = this.gameTablesRepository.create({
-        name: tableName,
-        creatorId: data.creator.userId,
-        status: 'waiting',
-        network,
-        buyInAmount: entryFee,
-        minBet: entryFee,
-        maxBet: entryFee,
-        minPlayers: 2,
-        maxPlayers,
-        currentPlayers: 1,
-        isPrivate,
-      } as any) as GameTable;
-      await this.gameTablesRepository.save(dbTable);
+      const dbTable = await this.gameTablesRepository.save(
+        this.gameTablesRepository.create({
+          name: tableName,
+          creatorId: data.creator.userId,
+          status: 'waiting',
+          network,
+          buyInAmount: entryFee,
+          minBet: entryFee,
+          maxBet: entryFee,
+          minPlayers: 2,
+          maxPlayers,
+          currentPlayers: 1,
+          isPrivate,
+        } as any)
+      );
 
       // 2) Auto-join inviter (table_players unique constraint prevents duplicates)
       try {
@@ -1531,7 +1514,45 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
   }
 
-  
+  /**
+   * Get online users for the lobby
+   */
+  @SubscribeMessage('get_online_users')
+  handleGetOnlineUsers(
+    @ConnectedSocket() client: Socket,
+  ) {
+    this.logger.log(`👥 GET_ONLINE_USERS request from client ${client.id}`);
+    this.logger.log(`   Total in onlineUsers set: ${this.onlineUsers.size}`);
+    
+    // Get all online users from the lobby (including bots!)
+    const onlineUsers = Array.from(this.onlineUsers).map(userId => {
+      const userData = this.userData.get(userId);
+      const isBot = userData?.email?.includes('@bot.ai') || false;
+      
+      return {
+        userId: userId,
+        email: userData?.email || '',
+        username: userData?.username || userData?.email?.split('@')[0] || 'Player',
+        avatar: userData?.avatar || null,
+        isOnline: true,
+        isBot, // ✅ Mark bots so frontend can show indicator
+        lastSeen: new Date().toISOString()
+      };
+    });
+    
+    const botCount = onlineUsers.filter(u => u.isBot).length;
+    const humanCount = onlineUsers.length - botCount;
+    
+    this.logger.log(`   📊 Returning ${onlineUsers.length} online users (${humanCount} humans, ${botCount} bots)`);
+    
+    return {
+      success: true,
+      onlineUsers,
+      totalOnline: onlineUsers.length,
+      humanCount,
+      botCount,
+    };
+  }
 
   /**
    * Send game invitation to another user
