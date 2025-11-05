@@ -291,9 +291,30 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         });
       }
 
-      // 5) Return table payload to inviter
-      client.emit('table_created', { id: dbTable.id, tableName, entryFee, maxPlayers });
-      return { success: true, table: { id: dbTable.id, tableName, entryFee, maxPlayers } };
+      // 5) ✅ FIX: Broadcast complete table data to lobby (including inviter)
+      const completeTableData = {
+        id: dbTable.id,
+        tableName: tableName,
+        entryFee: entryFee,
+        currentPlayers: 1, // ✅ FIX: Include currentPlayers
+        maxPlayers: maxPlayers,
+        status: 'waiting', // ✅ FIX: Include status
+        creatorId: data.creator.userId,
+        creatorEmail: data.creator.email,
+        isPrivate: isPrivate, // ✅ FIX: Include privacy setting
+        network: network,
+        timestamp: new Date(),
+      };
+      
+      // Broadcast to lobby room (for all users)
+      this.server.to('lobby').emit('table_created', completeTableData);
+      
+      // Also emit directly to inviter (in case they're not in lobby room yet)
+      client.emit('table_created', completeTableData);
+      
+      this.logger.log(`📢 Broadcasted complete table data for invitation table: ${dbTable.id}`);
+      
+      return { success: true, table: completeTableData };
     } catch (error) {
       this.logger.error(`invite_request failed: ${error.message}`);
       return { success: false, error: error.message };
