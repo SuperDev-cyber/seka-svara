@@ -1928,22 +1928,55 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         
         if (dbTable && dbTable.status === 'waiting') {
           this.logger.log(`✅ Found table in database, loading into memory...`);
-          // Load table into memory
+          this.logger.log(`   Database has ${dbTable.players?.length || 0} players`);
+          
+          // ✅ FIX: Load existing players from database
+          const existingPlayers = [];
+          if (dbTable.players && dbTable.players.length > 0) {
+            for (const dbPlayer of dbTable.players) {
+              try {
+                // Fetch user data for each player
+                const user = await this.usersRepository.findOne({ where: { id: dbPlayer.userId } });
+                if (user) {
+                  const playerBalance = user.platformScore ? Math.round(Number(user.platformScore)) : 0;
+                  existingPlayers.push({
+                    userId: dbPlayer.userId,
+                    email: user.email,
+                    username: user.name || user.email?.split('@')[0] || 'Player',
+                    avatar: user.avatar || null,
+                    balance: playerBalance,
+                    isActive: dbPlayer.status === 'active',
+                    joinedAt: dbPlayer.joinedAt,
+                    socketId: this.userSockets.get(dbPlayer.userId) || null, // Try to reconnect socket
+                  });
+                  this.logger.log(`   ✅ Loaded player: ${user.email} (balance: ${playerBalance})`);
+                }
+              } catch (err) {
+                this.logger.error(`   ❌ Failed to load player ${dbPlayer.userId}: ${err.message}`);
+              }
+            }
+          }
+          
+          // Load table into memory WITH existing players
           table = {
             id: dbTable.id,
             tableName: dbTable.name,
             entryFee: Number(dbTable.buyInAmount),
             maxPlayers: dbTable.maxPlayers,
-            players: [], // Will be populated as players join
+            players: existingPlayers, // ✅ FIX: Use loaded players instead of empty array
             status: 'waiting' as const,
+            privacy: dbTable.isPrivate ? 'private' : 'public',
+            isPrivate: dbTable.isPrivate,
+            invitedPlayers: [] as string[],
             creatorId: dbTable.creatorId,
             createdAt: new Date(dbTable.createdAt),
-            singlePlayerSince: new Date() as Date | null,
+            singlePlayerSince: existingPlayers.length === 1 ? new Date() : null, // Start cleanup timer if only 1 player
             gameId: null as string | null,
             lastWinnerId: null as string | null,
             lastHeartbeat: new Date()
           };
           this.activeTables.set(data.tableId, table);
+          this.logger.log(`✅ Table loaded with ${existingPlayers.length} player(s)`);
         }
       } catch (error) {
         this.logger.error(`❌ Error loading table from database: ${error.message}`);
@@ -2051,15 +2084,42 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const existingPlayer = table.players.find(p => p.userId === data.userId);
     if (existingPlayer) {
       this.logger.log(`🔄 Player ${data.userEmail} already in table ${table.tableName} - rejoin allowed`);
-      // Update player data in case it changed
+      this.logger.log(`   Current table state: ${table.players.length} players`);
+      
+      // ✅ Update player data and socketId (CRITICAL for reconnects!)
       existingPlayer.email = data.userEmail;
+      existingPlayer.socketId = client.id; // Update socket ID
       if (data.username) existingPlayer.username = data.username;
       if (data.avatar) existingPlayer.avatar = data.avatar;
+      
+      // ✅ Update userSockets map
+      this.userSockets.set(data.userId, client.id);
       
       // ✅ ENSURE they're in the Socket.IO room (in case they reconnected)
       const gameRoom = `table:${data.tableId}`;
       client.join(gameRoom);
       this.logger.log(`🎮 Client ${client.id} rejoined game room: ${gameRoom}`);
+      
+      // ✅ Log all players in table for debugging
+      for (const p of table.players) {
+        this.logger.log(`   Player: ${p.email}, socketId: ${p.socketId}, connected: ${p.socketId ? 'YES' : 'NO'}`);
+      }
+      
+      // ✅ Broadcast updated player list to all players in table (critical for syncing)
+      this.server.to(`table:${table.id}`).emit('player_list_updated', {
+        tableId: table.id,
+        players: table.players.map(p => ({
+          userId: p.userId,
+          email: p.email,
+          username: p.username,
+          avatar: p.avatar,
+          balance: p.balance,
+          isActive: p.isActive,
+          joinedAt: p.joinedAt
+        })),
+        timestamp: new Date(),
+      });
+      this.logger.log(`📢 Broadcasted player list to table room (${table.players.length} players)`);
       
       // IMPORTANT: Still check for auto-start even on rejoin!
       // The second player might have joined while this player was navigating
