@@ -259,7 +259,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         maxPlayers,
         currentPlayers: 1,
         isPrivate,
-      } as any);
+      } as any) as GameTable;
       await this.gameTablesRepository.save(dbTable);
 
       // 2) Auto-join inviter (table_players unique constraint prevents duplicates)
@@ -1531,45 +1531,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
   }
 
-  /**
-   * Get online users for the lobby
-   */
-  @SubscribeMessage('get_online_users')
-  handleGetOnlineUsers(
-    @ConnectedSocket() client: Socket,
-  ) {
-    this.logger.log(`👥 GET_ONLINE_USERS request from client ${client.id}`);
-    this.logger.log(`   Total in onlineUsers set: ${this.onlineUsers.size}`);
-    
-    // Get all online users from the lobby (including bots!)
-    const onlineUsers = Array.from(this.onlineUsers).map(userId => {
-      const userData = this.userData.get(userId);
-      const isBot = userData?.email?.includes('@bot.ai') || false;
-      
-      return {
-        userId: userId,
-        email: userData?.email || '',
-        username: userData?.username || userData?.email?.split('@')[0] || 'Player',
-        avatar: userData?.avatar || null,
-        isOnline: true,
-        isBot, // ✅ Mark bots so frontend can show indicator
-        lastSeen: new Date().toISOString()
-      };
-    });
-    
-    const botCount = onlineUsers.filter(u => u.isBot).length;
-    const humanCount = onlineUsers.length - botCount;
-    
-    this.logger.log(`   📊 Returning ${onlineUsers.length} online users (${humanCount} humans, ${botCount} bots)`);
-    
-    return {
-      success: true,
-      onlineUsers,
-      totalOnline: onlineUsers.length,
-      humanCount,
-      botCount,
-    };
-  }
+  
 
   /**
    * Send game invitation to another user
