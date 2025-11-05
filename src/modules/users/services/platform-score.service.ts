@@ -32,8 +32,10 @@ export class PlatformScoreService {
       throw new NotFoundException('User not found');
     }
 
-    const balanceBefore = user.platformScore || 0;
-    const balanceAfter = balanceBefore + amount;
+    // Ensure numeric math (avoid string concatenation like "2019" + 1 = "20191")
+    const numericAmount = Number(amount) || 0;
+    const balanceBefore = Number(user.platformScore) || 0;
+    const balanceAfter = balanceBefore + numericAmount;
 
     // Update user's Seka-Svara Score
     await this.usersRepository.update(userId, {
@@ -43,7 +45,7 @@ export class PlatformScoreService {
     // Create transaction record
     const transaction = this.scoreTransactionsRepository.create({
       userId,
-      amount,
+      amount: numericAmount,
       balanceBefore,
       balanceAfter,
       type,
