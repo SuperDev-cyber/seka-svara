@@ -24,7 +24,7 @@ COMMENT ON COLUMN games."participantCount" IS 'Total number of players who parti
 COMMENT ON COLUMN games."gameResults" IS 'JSON object with winners, losers, and amounts: {winners: [{userId, amount}], losers: [{userId, amount}]}';
 
 -- Create indexes for better query performance
-CREATE INDEX IF NOT EXISTS "idx_games_cardViewers" ON games USING GIN ("cardViewers");
+-- Note: Skipping GIN index on cardViewers to avoid operator class issues
 CREATE INDEX IF NOT EXISTS "idx_games_status" ON games ("status");
 CREATE INDEX IF NOT EXISTS "idx_games_tableId" ON games ("tableId");
 
