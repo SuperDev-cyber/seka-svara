@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException, Logger, Inject, forwardRef } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Logger, Inject, forwardRef, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Wallet } from './entities/wallet.entity';
@@ -24,7 +24,8 @@ export class WalletService {
     @InjectRepository(User)
     private usersRepository: Repository<User>,
     private addressGeneratorService: AddressGeneratorService,
-    private blockchainService: BlockchainService,
+    @Optional() @Inject(BlockchainService)
+    private blockchainService?: BlockchainService,
     @Inject(forwardRef(() => PlatformScoreService))
     private platformScoreService: PlatformScoreService,
   ) {}

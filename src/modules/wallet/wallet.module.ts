@@ -13,7 +13,7 @@ import { PlatformScoreService } from '../users/services/platform-score.service';
 @Module({
   imports: [
     TypeOrmModule.forFeature([Wallet, WalletTransaction, User, PlatformScoreTransaction]),
-    BlockchainModule,
+    BlockchainModule, // Keep import but make BlockchainService optional in WalletService
   ],
   controllers: [WalletController],
   providers: [WalletService, AddressGeneratorService, PlatformScoreService],
