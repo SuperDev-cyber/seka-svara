@@ -74,8 +74,20 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     tableName: string;
     entryFee: number;
     maxPlayers: number;
-    players: Array<{ userId: string; email: string; username?: string; avatar?: string }>;
+    players: Array<{ 
+      userId: string; 
+      email: string; 
+      username?: string; 
+      avatar?: string;
+      balance?: number;
+      isActive?: boolean;
+      joinedAt?: Date;
+      socketId?: string;
+    }>;
     status: 'waiting' | 'in_progress' | 'finished';
+    privacy?: string;
+    isPrivate?: boolean;
+    invitedPlayers?: string[];
     creatorId: string;
     createdAt: Date;
     singlePlayerSince: Date | null; // Track when table became single-player for auto-delete
@@ -1952,7 +1964,16 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
           this.logger.log(`   Database has ${dbTable.players?.length || 0} players`);
           
           // ✅ FIX: Load existing players from database
-          const existingPlayers: any[] = [];
+          const existingPlayers: Array<{ 
+            userId: string; 
+            email: string; 
+            username?: string; 
+            avatar?: string | null;
+            balance: number;
+            isActive: boolean;
+            joinedAt: Date;
+            socketId: string | null;
+          }> = [];
           if (dbTable.players && dbTable.players.length > 0) {
             for (const dbPlayer of dbTable.players) {
               try {
@@ -1984,18 +2005,18 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
             tableName: dbTable.name,
             entryFee: Number(dbTable.buyInAmount),
             maxPlayers: dbTable.maxPlayers,
-            players: existingPlayers as any, // ✅ FIX: Use loaded players instead of empty array
+            players: existingPlayers, // ✅ FIX: Use loaded players instead of empty array
             status: 'waiting' as const,
             privacy: dbTable.isPrivate ? 'private' : 'public',
             isPrivate: dbTable.isPrivate,
-            invitedPlayers: [] as string[],
+            invitedPlayers: [],
             creatorId: dbTable.creatorId,
             createdAt: new Date(dbTable.createdAt),
-            singlePlayerSince: existingPlayers.length === 1 ? new Date() : (null as Date | null), // Start cleanup timer if only 1 player
-            gameId: null as string | null,
-            lastWinnerId: null as string | null,
+            singlePlayerSince: existingPlayers.length === 1 ? new Date() : null, // Start cleanup timer if only 1 player
+            gameId: null,
+            lastWinnerId: null,
             lastHeartbeat: new Date()
-          } as any;
+          };
           this.activeTables.set(data.tableId, table);
           this.logger.log(`✅ Table loaded with ${existingPlayers.length} player(s)`);
         }
@@ -2102,7 +2123,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
     
     // Check if already in table (allow rejoining - just update info)
-    const existingPlayer: any = table.players.find((p: any) => p.userId === data.userId);
+    const existingPlayer = table.players.find(p => p.userId === data.userId);
     if (existingPlayer) {
       this.logger.log(`🔄 Player ${data.userEmail} already in table ${table.tableName} - rejoin allowed`);
       this.logger.log(`   Current table state: ${table.players.length} players`);
@@ -2122,14 +2143,14 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       this.logger.log(`🎮 Client ${client.id} rejoined game room: ${gameRoom}`);
       
       // ✅ Log all players in table for debugging
-      for (const p of table.players as any[]) {
+      for (const p of table.players) {
         this.logger.log(`   Player: ${p.email}, socketId: ${p.socketId || 'null'}, connected: ${p.socketId ? 'YES' : 'NO'}`);
       }
       
       // ✅ Broadcast updated player list to all players in table (critical for syncing)
       this.server.to(`table:${table.id}`).emit('player_list_updated', {
         tableId: table.id,
-        players: table.players.map((p: any) => ({
+        players: table.players.map(p => ({
           userId: p.userId,
           email: p.email,
           username: p.username,
