@@ -241,33 +241,68 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() data: {
       targetUserId: string;
+      existingTableId?: string; // ✅ NEW: Optional existing table ID
       tableSettings: { tableName: string; entryFee: number; maxPlayers?: number; isPrivate?: boolean; network?: string };
       creator: { userId: string; email?: string; username?: string; avatar?: string };
     },
   ) {
     try {
-      // 1) Create table (waiting) if not exists
       const tableName = data.tableSettings.tableName || 'Game Table';
       const maxPlayers = data.tableSettings.maxPlayers || 6;
       const entryFee = data.tableSettings.entryFee || 0;
       const network = data.tableSettings.network || 'BEP20';
       const isPrivate = !!data.tableSettings.isPrivate;
 
-      const dbTable = await this.gameTablesRepository.save(
-        this.gameTablesRepository.create({
-          name: tableName,
-          creatorId: data.creator.userId,
-          status: 'waiting',
-          network,
-          buyInAmount: entryFee,
-          minBet: entryFee,
-          maxBet: entryFee,
-          minPlayers: 2,
-          maxPlayers,
-          currentPlayers: 1,
-          isPrivate,
-        } as any)
-      ) as unknown as GameTable;
+      let dbTable: GameTable;
+
+      // ✅ FIX: Use existing table if provided, otherwise create new one
+      if (data.existingTableId) {
+        this.logger.log(`🔄 Using existing table: ${data.existingTableId}`);
+        dbTable = await this.gameTablesRepository.findOne({ 
+          where: { id: data.existingTableId }
+        }) as unknown as GameTable;
+        
+        if (!dbTable) {
+          this.logger.error(`❌ Existing table ${data.existingTableId} not found! Creating new one...`);
+          // Fallback: create new table if existing one not found
+          dbTable = await this.gameTablesRepository.save(
+            this.gameTablesRepository.create({
+              name: tableName,
+              creatorId: data.creator.userId,
+              status: 'waiting',
+              network,
+              buyInAmount: entryFee,
+              minBet: entryFee,
+              maxBet: entryFee,
+              minPlayers: 2,
+              maxPlayers,
+              currentPlayers: 1,
+              isPrivate,
+            } as any)
+          ) as unknown as GameTable;
+        } else {
+          this.logger.log(`✅ Found existing table: ${dbTable.name} (${dbTable.id})`);
+        }
+      } else {
+        // Create new table
+        this.logger.log(`📋 Creating NEW table: ${tableName}`);
+        dbTable = await this.gameTablesRepository.save(
+          this.gameTablesRepository.create({
+            name: tableName,
+            creatorId: data.creator.userId,
+            status: 'waiting',
+            network,
+            buyInAmount: entryFee,
+            minBet: entryFee,
+            maxBet: entryFee,
+            minPlayers: 2,
+            maxPlayers,
+            currentPlayers: 1,
+            isPrivate,
+          } as any)
+        ) as unknown as GameTable;
+        this.logger.log(`✅ Created new table: ${dbTable.id}`);
+      }
 
       // 2) Auto-join inviter (table_players unique constraint prevents duplicates)
       try {
@@ -303,12 +338,12 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         });
       }
 
-      // 5) ✅ FIX: Only broadcast to lobby ONCE (no duplicate to inviter since they're in lobby)
+      // 5) ✅ FIX: Only broadcast table_created for NEW tables (not when reusing existing)
       const completeTableData = {
         id: dbTable.id,
         tableName: tableName,
         entryFee: entryFee,
-        currentPlayers: 1, // ✅ FIX: Include currentPlayers
+        currentPlayers: dbTable.currentPlayers, // ✅ Use actual count from database
         maxPlayers: maxPlayers,
         status: 'waiting', // ✅ FIX: Include status
         creatorId: data.creator.userId,
@@ -318,10 +353,13 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         timestamp: new Date(),
       };
       
-      // ✅ FIX: Only broadcast to lobby ONCE - inviter is already in lobby room
-      this.server.to('lobby').emit('table_created', completeTableData);
-      
-      this.logger.log(`📢 Broadcasted table_created to lobby for invitation table: ${dbTable.id}`);
+      // ✅ FIX: Only broadcast to lobby if this is a NEW table (not reusing existing)
+      if (!data.existingTableId) {
+        this.server.to('lobby').emit('table_created', completeTableData);
+        this.logger.log(`📢 Broadcasted table_created to lobby for NEW invitation table: ${dbTable.id}`);
+      } else {
+        this.logger.log(`⏭️ Skipped table_created broadcast (reusing existing table: ${dbTable.id})`);
+      }
       
       return { success: true, table: completeTableData };
     } catch (error) {
