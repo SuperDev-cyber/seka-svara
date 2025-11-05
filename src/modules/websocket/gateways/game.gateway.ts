@@ -902,10 +902,12 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         // Reset modal tracking
         table.modalClosedPlayers = new Set<string>();
         
-        // ✅ FIX: Wait 2 seconds to ensure balance updates are committed to database
-        this.logger.log(`⏳ Waiting 2 seconds for balance updates to commit...`);
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        this.logger.log(`✅ Proceeding with balance check`);
+        // ✅ FIX: Wait 3 seconds to ensure all balance updates are committed to database
+        // This prevents the race condition where winners get removed because their
+        // balance update transaction hasn't completed yet
+        this.logger.log(`⏳ Waiting 3 seconds for all balance updates to commit to database...`);
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        this.logger.log(`✅ Database commit delay complete, proceeding with balance check`);
         
         // Check if all players still have sufficient balance
         // This will remove players with insufficient balance and restart if enough players remain
@@ -3080,11 +3082,13 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       this.logger.log(`👑 Next dealer will be: ${table.lastWinnerId}`);
     }
     
-    // ✅ FIX: Don't check balances immediately after game completion
-    // Balance updates might not be committed to DB yet (race condition)
-    // Balance check will happen after the 10-second restart countdown
-    // (See handleWinnerModalClosed() line 907)
-    this.logger.log(`⏳ Balance check deferred until after restart countdown (10 seconds)`);
+    // ❌ REMOVED: Don't check balances immediately after game completion
+    // This causes a race condition where winners get removed because their
+    // balance update hasn't been committed to the database yet.
+    // Balance check now happens only after the 10-second restart countdown
+    // in handleWinnerModalClosed() after a 2-second delay for DB commits.
+    this.logger.log(`⏳ Skipping immediate balance check to avoid race condition`);
+    this.logger.log(`   Balance check will occur after restart countdown (12 seconds delay)`);
   }
   
   /**
