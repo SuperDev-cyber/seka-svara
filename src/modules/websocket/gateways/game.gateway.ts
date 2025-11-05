@@ -1064,7 +1064,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       invitedPlayers: [] as string[], // Array of invited user IDs
       creatorId: data.creatorId,
       createdAt: new Date(),
-      singlePlayerSince: null, // Track for 1-minute idle timeout
+      singlePlayerSince: null as Date | null, // Track for idle timeout
       gameId: null as string | null, // Database game ID when game starts
       lastWinnerId: null as string | null, // Previous winner (becomes dealer)
       lastHeartbeat: new Date() // For auto-termination when server dies
@@ -1938,9 +1938,9 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
             status: 'waiting' as const,
             creatorId: dbTable.creatorId,
             createdAt: new Date(dbTable.createdAt),
-            singlePlayerSince: new Date(),
-            gameId: null,
-            lastWinnerId: null,
+            singlePlayerSince: new Date() as Date | null,
+            gameId: null as string | null,
+            lastWinnerId: null as string | null,
             lastHeartbeat: new Date()
           };
           this.activeTables.set(data.tableId, table);
@@ -1969,7 +1969,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         status: 'waiting' as const,
         creatorId: data.userId,
         createdAt: new Date(),
-        singlePlayerSince: new Date(),
+        singlePlayerSince: new Date() as Date | null,
         gameId: null as string | null,
         lastWinnerId: null as string | null,
         lastHeartbeat: new Date()
