@@ -2459,10 +2459,16 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     });
     
     // AUTO-START: ONLY start countdown when EXACTLY 2 players join (not 1, not on subsequent joins)
+    this.logger.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+    this.logger.log(`🎮 AUTO-START CHECK: ${table.players.length} players, status: ${table.status}`);
+    this.logger.log(`   Table ID: ${table.id}`);
+    this.logger.log(`   Countdown timer exists: ${this.countdownTimers.has(table.id)}`);
+    
     if (table.players.length === 2 && table.status === 'waiting') {
       // Check if countdown is already in progress for this table
       if (this.countdownTimers.has(table.id)) {
         this.logger.log(`⏱️ Countdown already in progress for table ${table.tableName}`);
+        this.logger.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
         return {
           success: true,
           message: 'Joined table'
@@ -2474,13 +2480,17 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       this.logger.log(`   📋 Player 2: ${table.players[1]?.email || table.players[1]?.userId}`);
       
       // Emit game_starting event to show countdown to all players
-      this.server.to(`table:${table.id}`).emit('game_starting', {
+      const gameStartingPayload = {
         tableId: table.id,
         tableName: table.tableName,
         countdown: 10, // 10 seconds countdown
         message: 'Game is starting! Get ready...',
         timestamp: new Date(),
-      });
+      };
+      this.logger.log(`📢 Broadcasting 'game_starting' event to room: table:${table.id}`);
+      this.logger.log(`   Payload:`, JSON.stringify(gameStartingPayload));
+      this.server.to(`table:${table.id}`).emit('game_starting', gameStartingPayload);
+      this.logger.log(`✅ 'game_starting' event broadcasted successfully`);
       
       // Start game after 10-second delay
       const timer = setTimeout(() => {
@@ -2491,11 +2501,16 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       
       // Store timer to prevent duplicates
       this.countdownTimers.set(table.id, timer);
+      this.logger.log(`✅ Countdown timer set for table ${table.id}`);
     } else if (table.players.length === 1) {
       this.logger.log(`⏳ Waiting for more players... (${table.players.length}/${table.maxPlayers})`);
     } else if (table.players.length > 2) {
       this.logger.log(`👥 ${table.players.length} players in table, countdown already started`);
+    } else {
+      this.logger.log(`⚠️ Auto-start conditions not met:`);
+      this.logger.log(`   Players: ${table.players.length}, Status: ${table.status}`);
     }
+    this.logger.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
     
     // ✅ FIX: Return full player list to joining player for immediate sync
     return {
