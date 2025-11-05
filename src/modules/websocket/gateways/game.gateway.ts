@@ -308,6 +308,32 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       // Inviter will be added to table_players only when they call join_table
       this.logger.log(`📋 Table created - inviter NOT auto-joined (must click JOIN TABLE)`);
 
+      // 2.5) ✅ ADD TABLE TO MEMORY so it's immediately available for join_table
+      if (!data.existingTableId) {
+        // Only add to memory if this is a NEW table (not reusing existing)
+        const memoryTable = {
+          id: dbTable.id,
+          tableName: tableName,
+          entryFee: entryFee,
+          maxPlayers: maxPlayers,
+          players: [], // Empty - inviter hasn't joined yet
+          status: 'waiting' as const,
+          privacy: isPrivate ? 'private' : 'public',
+          isPrivate: isPrivate,
+          invitedPlayers: [data.targetUserId], // Track invited player
+          creatorId: data.creator.userId,
+          createdAt: new Date(),
+          singlePlayerSince: null, // Will be set when first player joins
+          gameId: null,
+          lastWinnerId: null,
+          lastHeartbeat: new Date()
+        };
+        this.activeTables.set(dbTable.id, memoryTable);
+        this.logger.log(`✅ Added table to activeTables map: ${dbTable.id}`);
+      } else {
+        this.logger.log(`⏭️ Skipped adding to activeTables (existing table will be loaded on join)`);
+      }
+
       // 3) Create invitation row
       const invite = this.invitationsRepository.create({
         tableId: dbTable.id,
@@ -2287,9 +2313,23 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         }
       }
       
+      // ✅ FIX: Return full player list on rejoin for immediate sync
       return {
         success: true,
-        message: 'Already in table - rejoined successfully'
+        message: 'Already in table - rejoined successfully',
+        players: table.players.map(p => ({
+          userId: p.userId,
+          email: p.email,
+          username: p.username,
+          avatar: p.avatar,
+          balance: p.balance,
+          isActive: p.isActive,
+          joinedAt: p.joinedAt
+        })),
+        currentPlayers: table.players.length,
+        maxPlayers: table.maxPlayers,
+        tableName: table.tableName,
+        entryFee: table.entryFee
       };
     }
     
@@ -2457,9 +2497,23 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       this.logger.log(`👥 ${table.players.length} players in table, countdown already started`);
     }
     
+    // ✅ FIX: Return full player list to joining player for immediate sync
     return {
       success: true,
-      message: 'Joined table'
+      message: 'Joined table',
+      players: table.players.map(p => ({
+        userId: p.userId,
+        email: p.email,
+        username: p.username,
+        avatar: p.avatar,
+        balance: p.balance,
+        isActive: p.isActive,
+        joinedAt: p.joinedAt
+      })),
+      currentPlayers: table.players.length,
+      maxPlayers: table.maxPlayers,
+      tableName: table.tableName,
+      entryFee: table.entryFee
     };
   }
 
