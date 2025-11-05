@@ -2398,6 +2398,8 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       }
       
       this.logger.log(`🚀 AUTO-START: EXACTLY 2 players present - starting game with 10-second countdown!`);
+      this.logger.log(`   📋 Player 1: ${table.players[0]?.email || table.players[0]?.userId}`);
+      this.logger.log(`   📋 Player 2: ${table.players[1]?.email || table.players[1]?.userId}`);
       
       // Emit game_starting event to show countdown to all players
       this.server.to(`table:${table.id}`).emit('game_starting', {
@@ -2410,6 +2412,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       
       // Start game after 10-second delay
       const timer = setTimeout(() => {
+        this.logger.log(`⏰ 10-second countdown finished for table ${table.tableName} - calling autoStartGame`);
         this.autoStartGame(table.id);
         this.countdownTimers.delete(table.id); // Clean up timer reference
       }, 10000); // 10 seconds
@@ -2452,6 +2455,16 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     
     if (table.players.length < 2) {
       this.logger.warn(`⚠️ Cannot auto-start: only ${table.players.length} player(s) in table ${table.tableName}`);
+      this.logger.warn(`   📋 Players in memory:`, table.players.map(p => p.email || p.userId));
+      this.logger.warn(`   💡 TIP: Second player may not have called join_table yet`);
+      
+      // Cancel countdown timer if it exists
+      if (this.countdownTimers.has(tableId)) {
+        clearTimeout(this.countdownTimers.get(tableId));
+        this.countdownTimers.delete(tableId);
+        this.logger.log(`⏱️ Cleared countdown timer for table ${tableId}`);
+      }
+      
       return;
     }
     
