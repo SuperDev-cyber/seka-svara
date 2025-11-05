@@ -8,7 +8,16 @@ import helmet from 'helmet';
 import { IoAdapter } from '@nestjs/platform-socket.io';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  // Increase body size limit to handle base64-encoded images (10MB)
+  // Base64 encoding increases size by ~33%, so 5MB image becomes ~6.7MB base64
+  const app = await NestFactory.create(AppModule, {
+    bodyParser: true,
+    rawBody: false,
+  });
+  
+  // Configure Express body parser limits for JSON and URL-encoded bodies
+  app.use(require('express').json({ limit: '10mb' }));
+  app.use(require('express').urlencoded({ limit: '10mb', extended: true }));
 
   // Configure Socket.io adapter with CORS
   app.useWebSocketAdapter(new IoAdapter(app));
