@@ -11,6 +11,7 @@ import { Server, Socket } from 'socket.io';
 import { Logger, UseGuards, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { ConfigService } from '@nestjs/config';
 import { GameService } from '../../game/game.service';
 import { GameEngine } from '../../game/services/game-engine.service';
 import { GameStateService } from '../../game/services/game-state.service';
@@ -107,6 +108,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private readonly gameStateService: GameStateService,
     private readonly walletService: WalletService,
     private readonly emailService: EmailService,
+    private readonly configService: ConfigService,
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
     @InjectRepository(GameTable)
@@ -385,6 +387,65 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     } catch (error) {
       this.logger.error(`invite_request failed: ${error.message}`);
       return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Send game invitation via email
+   */
+  @SubscribeMessage('invite_by_email')
+  async handleInviteByEmail(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: {
+      email: string;
+      tableId: string;
+      tableName: string;
+      entryFee: number;
+      inviterName: string;
+      inviterUserId: string;
+    },
+  ) {
+    try {
+      this.logger.log(`📧 Email invitation request received`);
+      this.logger.log(`   From: ${data.inviterName} (${data.inviterUserId})`);
+      this.logger.log(`   To: ${data.email}`);
+      this.logger.log(`   Table: ${data.tableName} (ID: ${data.tableId})`);
+      
+      // Generate game URL with table ID
+      const frontendUrl = this.configService.get('FRONTEND_URL') || 'https://seka-svara-frontend.vercel.app';
+      const gameUrl = `${frontendUrl}/game/${data.tableId}?invited=true`;
+      
+      // Send email invitation
+      const emailResult = await this.emailService.sendGameInvitation(
+        data.email,
+        data.inviterName,
+        data.tableName,
+        data.entryFee,
+        gameUrl,
+      );
+      
+      if (emailResult.success) {
+        this.logger.log(`✅ Email invitation sent successfully to ${data.email}`);
+        this.logger.log(`   Message ID: ${emailResult.messageId}`);
+        
+        return {
+          success: true,
+          message: `Invitation sent to ${data.email}`,
+          email: data.email,
+        };
+      } else {
+        this.logger.error(`❌ Failed to send email to ${data.email}: ${emailResult.error}`);
+        return {
+          success: false,
+          error: `Failed to send email: ${emailResult.error}`,
+        };
+      }
+    } catch (error) {
+      this.logger.error(`❌ Error in handleInviteByEmail: ${error.message}`);
+      return {
+        success: false,
+        error: error.message,
+      };
     }
   }
 
@@ -3086,9 +3147,9 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     // This causes a race condition where winners get removed because their
     // balance update hasn't been committed to the database yet.
     // Balance check now happens only after the 10-second restart countdown
-    // in handleWinnerModalClosed() after a 2-second delay for DB commits.
+    // in handleWinnerModalClosed() after a 3-second delay for DB commits.
     this.logger.log(`⏳ Skipping immediate balance check to avoid race condition`);
-    this.logger.log(`   Balance check will occur after restart countdown (12 seconds delay)`);
+    this.logger.log(`   Balance check will occur after restart countdown (13 seconds delay)`);
   }
   
   /**
