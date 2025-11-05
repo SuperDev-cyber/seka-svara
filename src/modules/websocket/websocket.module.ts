@@ -7,10 +7,11 @@ import { WalletModule } from '../wallet/wallet.module';
 import { EmailModule } from '../email/email.module';
 import { User } from '../users/entities/user.entity';
 import { GameTable } from '../tables/entities/game-table.entity';
+import { Invitation } from '../tables/entities/invitation.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([User, GameTable]),
+    TypeOrmModule.forFeature([User, GameTable, Invitation]),
     forwardRef(() => GameModule),
     TablesModule,
     WalletModule,

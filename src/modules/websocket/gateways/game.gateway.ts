@@ -19,6 +19,7 @@ import { EmailService } from '../../email/email.service';
 import { GameStatus } from '../../game/types/game-state.types';
 import { User } from '../../users/entities/user.entity';
 import { GameTable } from '../../tables/entities/game-table.entity';
+import { Invitation } from '../../tables/entities/invitation.entity';
 
 /**
  * WebSocket Gateway for real-time Seka Svara game communication
@@ -95,6 +96,8 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private readonly usersRepository: Repository<User>,
     @InjectRepository(GameTable)
     private readonly gameTablesRepository: Repository<GameTable>,
+    @InjectRepository(Invitation)
+    private readonly invitationsRepository: Repository<Invitation>,
   ) {}
 
   // ❌ REMOVED: Bot registration code (onModuleInit and addBotToOnlineUsers)
@@ -204,6 +207,145 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       socketId: client.id,
       timestamp: new Date(),
     });
+  }
+  /**
+   * Online users list (normalized to lowercase emails)
+   */
+  @SubscribeMessage('get_online_users')
+  handleGetOnlineUsers(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data?: any,
+  ) {
+    const users = Array.from(this.userData.values()).map(u => ({
+      userId: u.userId,
+      username: u.username || (u.email ? u.email.split('@')[0] : 'Player'),
+      email: (u.email || '').toLowerCase(),
+      avatar: u.avatar,
+      isOnline: true,
+    }));
+    client.emit('online_users', users);
+    return { success: true, onlineUsers: users };
+  }
+
+  /**
+   * Send invitation request (DB-first) and auto-join inviter
+   */
+  @SubscribeMessage('invite_request')
+  async handleInviteRequest(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: {
+      targetUserId: string;
+      tableSettings: { tableName: string; entryFee: number; maxPlayers?: number; isPrivate?: boolean; network?: string };
+      creator: { userId: string; email?: string; username?: string; avatar?: string };
+    },
+  ) {
+    try {
+      // 1) Create table (waiting) if not exists
+      const tableName = data.tableSettings.tableName || 'Game Table';
+      const maxPlayers = data.tableSettings.maxPlayers || 6;
+      const entryFee = data.tableSettings.entryFee || 0;
+      const network = data.tableSettings.network || 'BEP20';
+      const isPrivate = !!data.tableSettings.isPrivate;
+
+      const dbTable = this.gameTablesRepository.create({
+        name: tableName,
+        creatorId: data.creator.userId,
+        status: 'waiting',
+        network,
+        buyInAmount: entryFee,
+        minBet: entryFee,
+        maxBet: entryFee,
+        minPlayers: 2,
+        maxPlayers,
+        currentPlayers: 1,
+        isPrivate,
+      } as any);
+      await this.gameTablesRepository.save(dbTable);
+
+      // 2) Auto-join inviter (table_players unique constraint prevents duplicates)
+      try {
+        await this.gameTablesRepository.query(
+          `INSERT INTO table_players (id, "tableId", "userId", "seatNumber", chips, "isReady", status, "joinedAt")
+           VALUES (uuid_generate_v4(), $1, $2, $3, $4, $5, $6, NOW())
+           ON CONFLICT DO NOTHING`,
+          [dbTable.id, data.creator.userId, 0, 0, false, 'active'],
+        );
+      } catch {}
+
+      // 3) Create invitation row
+      const invite = this.invitationsRepository.create({
+        tableId: dbTable.id,
+        inviterId: data.creator.userId,
+        inviteeId: data.targetUserId,
+        status: 'pending',
+      });
+      await this.invitationsRepository.save(invite);
+
+      // 4) Emit invitation to invitee (if online)
+      const targetSocketId = this.userSockets.get(data.targetUserId);
+      if (targetSocketId) {
+        this.server.to(targetSocketId).emit('game_invitation', {
+          id: invite.id,
+          tableId: dbTable.id,
+          tableName,
+          entryFee,
+          maxPlayers,
+          inviterId: data.creator.userId,
+          inviterName: data.creator.username || (data.creator.email ? data.creator.email.split('@')[0] : 'Player'),
+          timestamp: new Date(),
+        });
+      }
+
+      // 5) Return table payload to inviter
+      client.emit('table_created', { id: dbTable.id, tableName, entryFee, maxPlayers });
+      return { success: true, table: { id: dbTable.id, tableName, entryFee, maxPlayers } };
+    } catch (error) {
+      this.logger.error(`invite_request failed: ${error.message}`);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Accept invitation (DB-first) and join table
+   */
+  @SubscribeMessage('invite_accept')
+  async handleInviteAccept(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { invitationId: string; userId: string },
+  ) {
+    try {
+      const invitation = await this.invitationsRepository.findOne({ where: { id: data.invitationId } });
+      if (!invitation || invitation.status !== 'pending') {
+        return { success: false, message: 'Invalid or expired invitation' };
+      }
+
+      // Add invitee to table_players
+      try {
+        await this.gameTablesRepository.query(
+          `INSERT INTO table_players (id, "tableId", "userId", "seatNumber", chips, "isReady", status, "joinedAt")
+           VALUES (uuid_generate_v4(), $1, $2, $3, $4, $5, $6, NOW())
+           ON CONFLICT DO NOTHING`,
+          [invitation.tableId, data.userId, 1, 0, false, 'active'],
+        );
+      } catch {}
+
+      // Increment currentPlayers
+      await this.gameTablesRepository.query(
+        `UPDATE game_tables SET "currentPlayers" = "currentPlayers" + 1, "updatedAt" = NOW() WHERE id = $1`,
+        [invitation.tableId],
+      );
+
+      // Mark invitation accepted
+      invitation.status = 'accepted';
+      await this.invitationsRepository.save(invitation);
+
+      // Respond success with tableId
+      client.emit('invite_accepted', { tableId: invitation.tableId });
+      return { success: true, tableId: invitation.tableId };
+    } catch (error) {
+      this.logger.error(`invite_accept failed: ${error.message}`);
+      return { success: false, error: error.message };
+    }
   }
 
   /**
