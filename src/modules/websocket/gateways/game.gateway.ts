@@ -902,6 +902,11 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         // Reset modal tracking
         table.modalClosedPlayers = new Set<string>();
         
+        // ✅ FIX: Wait 2 seconds to ensure balance updates are committed to database
+        this.logger.log(`⏳ Waiting 2 seconds for balance updates to commit...`);
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        this.logger.log(`✅ Proceeding with balance check`);
+        
         // Check if all players still have sufficient balance
         // This will remove players with insufficient balance and restart if enough players remain
         await this.checkAndRemoveInsufficientPlayers(tableId);
@@ -3075,8 +3080,11 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       this.logger.log(`👑 Next dealer will be: ${table.lastWinnerId}`);
     }
     
-    // Auto-remove players with insufficient balance after game ends
-    await this.checkAndRemoveInsufficientPlayers(tableId);
+    // ✅ FIX: Don't check balances immediately after game completion
+    // Balance updates might not be committed to DB yet (race condition)
+    // Balance check will happen after the 10-second restart countdown
+    // (See handleWinnerModalClosed() line 907)
+    this.logger.log(`⏳ Balance check deferred until after restart countdown (10 seconds)`);
   }
   
   /**
