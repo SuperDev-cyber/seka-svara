@@ -2228,12 +2228,12 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       userId: data.userId,
       email: data.userEmail,
       username: data.username || data.userEmail.split('@')[0], // Fallback to email prefix
-      avatar: data.avatar || undefined,
+      avatar: data.avatar || null, // ✅ Use null instead of undefined to match type definition
       balance: userBalance, // ✅ Set from platformScore
       isActive: true,
       joinedAt: new Date(),
       socketId: client.id,
-    } as any);
+    });
     
     // ✅ CRITICAL FIX: Join the Socket.IO room to receive game events!
     const gameRoom = `table:${data.tableId}`;
