@@ -24,10 +24,10 @@ export class WalletService {
     @InjectRepository(User)
     private usersRepository: Repository<User>,
     private addressGeneratorService: AddressGeneratorService,
-    @Optional() @Inject(BlockchainService)
-    private blockchainService?: BlockchainService,
     @Inject(forwardRef(() => PlatformScoreService))
     private platformScoreService: PlatformScoreService,
+    @Optional() @Inject(BlockchainService)
+    private blockchainService?: BlockchainService,
   ) {}
 
   async getUserWallet(userId: string) {
