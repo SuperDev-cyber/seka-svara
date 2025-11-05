@@ -1349,7 +1349,70 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     console.log('@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@', data.userId);
     this.logger.log(`👁️ Player ${data.userId} wants to view their cards in table ${data.tableId}`);
     
-    const table = this.activeTables.get(data.tableId);
+    let table = this.activeTables.get(data.tableId);
+    
+    // ✅ FIX: If table not in memory, try loading from database
+    if (!table) {
+      this.logger.log(`🔍 Table ${data.tableId} not in memory for card viewing, checking database...`);
+      try {
+        const dbTable = await this.gameTablesRepository.findOne({ 
+          where: { id: data.tableId },
+          relations: ['players']
+        });
+        
+        if (dbTable && dbTable.currentGameId) {
+          this.logger.log(`✅ Found table in database with active game, loading into memory...`);
+          
+          // Load existing players from database
+          const existingPlayers: Array<any> = [];
+          if (dbTable.players && dbTable.players.length > 0) {
+            for (const dbPlayer of dbTable.players) {
+              try {
+                const user = await this.usersRepository.findOne({ where: { id: dbPlayer.userId } });
+                if (user) {
+                  existingPlayers.push({
+                    userId: dbPlayer.userId,
+                    email: user.email,
+                    username: user.username || user.email?.split('@')[0] || 'Player',
+                    avatar: user.avatar || null,
+                    balance: user.platformScore ? Math.round(Number(user.platformScore)) : 0,
+                    isActive: dbPlayer.status === 'active',
+                    joinedAt: dbPlayer.joinedAt,
+                    socketId: this.userSockets.get(dbPlayer.userId) || null,
+                  });
+                }
+              } catch (err) {
+                this.logger.error(`   ❌ Failed to load player ${dbPlayer.userId}: ${err.message}`);
+              }
+            }
+          }
+          
+          // Load table into memory
+          table = {
+            id: dbTable.id,
+            tableName: dbTable.name,
+            entryFee: Number(dbTable.buyInAmount),
+            maxPlayers: dbTable.maxPlayers,
+            players: existingPlayers,
+            status: 'in_progress' as const,
+            privacy: dbTable.isPrivate ? 'private' : 'public',
+            isPrivate: dbTable.isPrivate,
+            invitedPlayers: [],
+            creatorId: dbTable.creatorId,
+            createdAt: new Date(dbTable.createdAt),
+            singlePlayerSince: null,
+            gameId: dbTable.currentGameId,
+            lastWinnerId: null,
+            lastHeartbeat: new Date()
+          };
+          this.activeTables.set(data.tableId, table);
+          this.logger.log(`✅ Table loaded for card viewing with ${existingPlayers.length} player(s)`);
+        }
+      } catch (error) {
+        this.logger.error(`❌ Error loading table for card viewing: ${error.message}`);
+      }
+    }
+    
     if (!table || !table.gameId) {
       return { success: false, message: 'Table or game not found' };
     }
@@ -1956,8 +2019,9 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
           relations: ['players']
         });
         
-        if (dbTable && dbTable.status === 'waiting') {
-          this.logger.log(`✅ Found table in database, loading into memory...`);
+        // ✅ FIX: Load tables with 'waiting' OR 'playing' status (not just 'waiting')
+        if (dbTable && (dbTable.status === 'waiting' || dbTable.status === 'playing')) {
+          this.logger.log(`✅ Found table in database (status: ${dbTable.status}), loading into memory...`);
           this.logger.log(`   Database has ${dbTable.players?.length || 0} players`);
           
           // ✅ FIX: Load existing players from database
@@ -2003,14 +2067,14 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
             entryFee: Number(dbTable.buyInAmount),
             maxPlayers: dbTable.maxPlayers,
             players: existingPlayers, // ✅ FIX: Use loaded players instead of empty array
-            status: 'waiting' as const,
+            status: (dbTable.status === 'playing' ? 'in_progress' : 'waiting') as 'waiting' | 'in_progress', // ✅ FIX: Use actual status from DB
             privacy: dbTable.isPrivate ? 'private' : 'public',
             isPrivate: dbTable.isPrivate,
             invitedPlayers: [],
             creatorId: dbTable.creatorId,
             createdAt: new Date(dbTable.createdAt),
             singlePlayerSince: existingPlayers.length === 1 ? new Date() : null, // Start cleanup timer if only 1 player
-            gameId: null,
+            gameId: dbTable.currentGameId || null, // ✅ FIX: Load existing gameId if present
             lastWinnerId: null,
             lastHeartbeat: new Date()
           };
