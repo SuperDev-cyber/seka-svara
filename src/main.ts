@@ -65,6 +65,11 @@ async function bootstrap() {
         console.log('✅ CORS: Allowing Vercel deployment:', origin);
         callback(null, true);
       }
+      // Allow production domains (*.sekasvara.io and *.sekasvara-frontend.io variants)
+      else if (origin.endsWith('sekasvara.io') || origin.endsWith('.sekasvara.io')) {
+        console.log('✅ CORS: Allowing sekasvara.io domain:', origin);
+        callback(null, true);
+      }
       // Allow in development mode
       else if (process.env.NODE_ENV === 'development') {
         console.log('⚠️ CORS: Allowing in development mode:', origin);
