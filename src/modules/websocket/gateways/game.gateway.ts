@@ -2104,6 +2104,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         if (dbTable && (dbTable.status === 'waiting' || dbTable.status === 'playing')) {
           this.logger.log(`✅ Found table in database (status: ${dbTable.status}), loading into memory...`);
           this.logger.log(`   Database has ${dbTable.players?.length || 0} players`);
+          this.logger.log(`   Database currentPlayers: ${dbTable.currentPlayers || 0}`);
           
           // ✅ FIX: Load existing players from database
           const existingPlayers: Array<{ 
@@ -2116,6 +2117,8 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
             joinedAt?: Date;
             socketId?: string | null;
           }> = [];
+          
+          // Load players from table_players relation
           if (dbTable.players && dbTable.players.length > 0) {
             for (const dbPlayer of dbTable.players) {
               try {
@@ -2141,6 +2144,12 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
             }
           }
           
+          // ✅ FIX: If database says there are more players than we loaded, try to sync
+          if (dbTable.currentPlayers > existingPlayers.length) {
+            this.logger.warn(`⚠️ Database shows ${dbTable.currentPlayers} players but only loaded ${existingPlayers.length} - attempting to sync`);
+            // This will be handled by the join logic below
+          }
+          
           // Load table into memory WITH existing players
           table = {
             id: dbTable.id,
@@ -2160,7 +2169,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
             lastHeartbeat: new Date()
           };
           this.activeTables.set(data.tableId, table);
-          this.logger.log(`✅ Table loaded with ${existingPlayers.length} player(s)`);
+          this.logger.log(`✅ Table loaded with ${existingPlayers.length} player(s) from database`);
         }
       } catch (error) {
         this.logger.error(`❌ Error loading table from database: ${error.message}`);
@@ -2282,16 +2291,112 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       this.logger.error(`Error checking database for existing player: ${error.message}`);
     }
     
+    // ✅ FIX: If player exists in DB but not in memory, add them to memory
+    if (dbPlayerExists && !existingPlayer) {
+      this.logger.log(`🔄 Player ${data.userEmail} exists in database but not in memory - adding to memory`);
+      
+      // Fetch user's platformScore from database
+      let userBalance = 0;
+      try {
+        const userRecord = await this.usersRepository.findOne({ where: { id: data.userId } });
+        if (userRecord && userRecord.platformScore !== null && userRecord.platformScore !== undefined) {
+          userBalance = Math.round(Number(userRecord.platformScore));
+          this.logger.log(`💰 Fetched platformScore for ${data.userEmail}: ${userBalance} SEKA`);
+        }
+      } catch (error) {
+        this.logger.error(`❌ Error fetching user platformScore: ${error.message}`);
+      }
+      
+      // Add player to in-memory table
+      table.players.push({
+        userId: data.userId,
+        email: data.userEmail,
+        username: data.username || data.userEmail.split('@')[0],
+        avatar: data.avatar || null,
+        balance: userBalance,
+        isActive: true,
+        joinedAt: new Date(),
+        socketId: client.id,
+      });
+      
+      this.logger.log(`✅ Added player ${data.userEmail} to in-memory table (now ${table.players.length} players)`);
+      
+      // Update database currentPlayers count
+      try {
+        await this.gameTablesRepository.update(data.tableId, {
+          currentPlayers: table.players.length,
+        });
+        this.logger.log(`💾 ✅ Database updated: Table ${data.tableId} now has ${table.players.length} players`);
+      } catch (error) {
+        this.logger.error(`❌ Failed to update table in database: ${error.message}`);
+      }
+      
+      // Broadcast updated player list
+      this.server.to(`table:${table.id}`).emit('player_list_updated', {
+        tableId: table.id,
+        players: table.players.map(p => ({
+          userId: p.userId,
+          email: p.email,
+          username: p.username,
+          avatar: p.avatar,
+          balance: p.balance,
+          isActive: p.isActive,
+          joinedAt: p.joinedAt
+        })),
+        timestamp: new Date(),
+      });
+      
+      // Join the Socket.IO room
+      const gameRoom = `table:${data.tableId}`;
+      client.join(gameRoom);
+      this.logger.log(`🎮 Client ${client.id} joined game room: ${gameRoom}`);
+      
+      // Update userSockets map
+      this.userSockets.set(data.userId, client.id);
+      
+      // Return success with full player list
+      return {
+        success: true,
+        message: 'Joined table successfully (synced from database)',
+        players: table.players.map(p => ({
+          userId: p.userId,
+          email: p.email,
+          username: p.username,
+          avatar: p.avatar,
+          balance: p.balance,
+          isActive: p.isActive,
+          joinedAt: p.joinedAt
+        })),
+        currentPlayers: table.players.length,
+        maxPlayers: table.maxPlayers,
+        tableName: table.tableName,
+        entryFee: table.entryFee
+      };
+    }
+    
     if (existingPlayer || dbPlayerExists) {
       this.logger.log(`🔄 Player ${data.userEmail} already in table ${table.tableName} - rejoin allowed`);
       this.logger.log(`   Current table state: ${table.players.length} players`);
       
       // ✅ Update player data and socketId (CRITICAL for reconnects!)
-      if (existingPlayer) {
-        existingPlayer.email = data.userEmail;
-        existingPlayer.socketId = client.id; // Update socket ID
-        if (data.username) existingPlayer.username = data.username;
-        if (data.avatar) existingPlayer.avatar = data.avatar;
+      const playerToUpdate = existingPlayer || table.players.find(p => p.userId === data.userId);
+      if (playerToUpdate) {
+        playerToUpdate.email = data.userEmail;
+        playerToUpdate.socketId = client.id; // Update socket ID
+        if (data.username) playerToUpdate.username = data.username;
+        if (data.avatar) playerToUpdate.avatar = data.avatar;
+        
+        // Update balance if needed
+        if (playerToUpdate.balance === undefined || playerToUpdate.balance === null) {
+          try {
+            const userRecord = await this.usersRepository.findOne({ where: { id: data.userId } });
+            if (userRecord && userRecord.platformScore !== null && userRecord.platformScore !== undefined) {
+              playerToUpdate.balance = Math.round(Number(userRecord.platformScore));
+            }
+          } catch (error) {
+            this.logger.error(`❌ Error fetching balance for update: ${error.message}`);
+          }
+        }
       }
       
       // ✅ Update userSockets map
@@ -2492,22 +2597,36 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       this.logger.log(`🔓 Lock released for ${data.userEmail} joining table ${data.tableId}`);
     }
     
-    // ✅ CRITICAL FIX: Join the Socket.IO room to receive game events!
-    const gameRoom = `table:${data.tableId}`;
-    client.join(gameRoom);
-    this.logger.log(`🎮 Client ${client.id} joined game room: ${gameRoom}`);
-    
-    // ✅ UPDATE DATABASE with new player count (ALL tables)
-    (async () => {
-      try {
-        await this.gameTablesRepository.update(data.tableId, {
-          currentPlayers: table.players.length,
-        });
-        this.logger.log(`💾 ✅ Database updated: Table ${data.tableId} now has ${table.players.length} players`);
-      } catch (error) {
-        this.logger.error(`❌ Failed to update table in database: ${error.message}`);
-      }
-    })();
+      // ✅ CRITICAL FIX: Join the Socket.IO room to receive game events!
+      const gameRoom = `table:${data.tableId}`;
+      client.join(gameRoom);
+      this.logger.log(`🎮 Client ${client.id} joined game room: ${gameRoom}`);
+      
+      // ✅ UPDATE DATABASE with new player count AND ensure player is in table_players
+      (async () => {
+        try {
+          // Update currentPlayers count
+          await this.gameTablesRepository.update(data.tableId, {
+            currentPlayers: table.players.length,
+          });
+          this.logger.log(`💾 ✅ Database updated: Table ${data.tableId} now has ${table.players.length} players`);
+          
+          // ✅ FIX: Ensure player is in table_players table (for invitations)
+          try {
+            await this.gameTablesRepository.query(
+              `INSERT INTO table_players (id, "tableId", "userId", "seatNumber", chips, "isReady", status, "joinedAt")
+               VALUES (uuid_generate_v4(), $1, $2, $3, $4, $5, $6, NOW())
+               ON CONFLICT ("tableId", "userId") DO UPDATE SET status = 'active', "joinedAt" = NOW()`,
+              [data.tableId, data.userId, 1, 0, false, 'active'],
+            );
+            this.logger.log(`💾 ✅ Ensured player ${data.userId} is in table_players`);
+          } catch (dbError) {
+            this.logger.warn(`⚠️ Could not ensure player in table_players: ${dbError.message}`);
+          }
+        } catch (error) {
+          this.logger.error(`❌ Failed to update table in database: ${error.message}`);
+        }
+      })();
 
     
     const isCreator = data.userId === table.creatorId;
