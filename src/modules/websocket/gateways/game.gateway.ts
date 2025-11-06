@@ -204,16 +204,16 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
           // Notify the remaining player if they're connected (for single-player tables)
           if (table.players.length > 0) {
-            const player = table.players[0];
-            if (player) {
-              const socketId = this.userSockets.get(player.userId);
-              if (socketId) {
-                this.server.to(socketId).emit('table_closed', {
-                  tableId: table.id,
-                  tableName: table.tableName,
+          const player = table.players[0];
+          if (player) {
+            const socketId = this.userSockets.get(player.userId);
+            if (socketId) {
+              this.server.to(socketId).emit('table_closed', {
+                tableId: table.id,
+                tableName: table.tableName,
                   reason: 'No other players joined within 20 seconds',
-                  timestamp: new Date(),
-                });
+                timestamp: new Date(),
+              });
               }
             }
           }
@@ -2510,20 +2510,20 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.logger.log(`🔒 Lock acquired for ${data.userEmail} joining table ${data.tableId}`);
     
     try {
-      // ✅ FIX: Fetch user's platformScore from database to set initial balance
-      let userBalance = 0;
-      try {
-        const userRecord = await this.usersRepository.findOne({ where: { id: data.userId } });
-        if (userRecord && userRecord.platformScore !== null && userRecord.platformScore !== undefined) {
-          userBalance = Math.round(Number(userRecord.platformScore));
-          this.logger.log(`💰 Fetched platformScore for ${data.userEmail}: ${userBalance} SEKA`);
-        } else {
-          this.logger.warn(`⚠️ No platformScore found for ${data.userEmail}, defaulting to 0`);
-        }
-      } catch (error) {
-        this.logger.error(`❌ Error fetching user platformScore: ${error.message}`);
+    // ✅ FIX: Fetch user's platformScore from database to set initial balance
+    let userBalance = 0;
+    try {
+      const userRecord = await this.usersRepository.findOne({ where: { id: data.userId } });
+      if (userRecord && userRecord.platformScore !== null && userRecord.platformScore !== undefined) {
+        userBalance = Math.round(Number(userRecord.platformScore));
+        this.logger.log(`💰 Fetched platformScore for ${data.userEmail}: ${userBalance} SEKA`);
+      } else {
+        this.logger.warn(`⚠️ No platformScore found for ${data.userEmail}, defaulting to 0`);
       }
-      
+    } catch (error) {
+      this.logger.error(`❌ Error fetching user platformScore: ${error.message}`);
+    }
+    
       // ✅ FIX RACE CONDITION: Double-check player doesn't exist right before adding (atomic check with lock)
       // Re-fetch table to ensure we have latest state
       const currentTable = this.activeTables.get(data.tableId);
@@ -2550,21 +2550,21 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       }
       
       const duplicateCheck = currentTable.players.find(p => p.userId === data.userId);
-      if (duplicateCheck) {
-        this.logger.warn(`⚠️ Race condition detected: Player ${data.userEmail} already in table (duplicate join attempt blocked)`);
+    if (duplicateCheck) {
+      this.logger.warn(`⚠️ Race condition detected: Player ${data.userEmail} already in table (duplicate join attempt blocked)`);
         joiningSet.delete(data.userId);
-        return {
-          success: false,
-          message: 'You are already in this table',
+      return {
+        success: false,
+        message: 'You are already in this table',
           players: currentTable.players.map(p => ({
-            userId: p.userId,
-            email: p.email,
-            username: p.username,
-            avatar: p.avatar,
-            balance: p.balance,
-            isActive: p.isActive,
-            joinedAt: p.joinedAt
-          })),
+          userId: p.userId,
+          email: p.email,
+          username: p.username,
+          avatar: p.avatar,
+          balance: p.balance,
+          isActive: p.isActive,
+          joinedAt: p.joinedAt
+        })),
           currentPlayers: currentTable.players.length,
           maxPlayers: currentTable.maxPlayers,
           tableName: currentTable.tableName,
@@ -2579,20 +2579,20 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         return {
           success: false,
           message: 'Table is full'
-        };
-      }
+      };
+    }
     
-      // Add player with real user data and balance
+    // Add player with real user data and balance
       currentTable.players.push({
-        userId: data.userId,
-        email: data.userEmail,
-        username: data.username || data.userEmail.split('@')[0], // Fallback to email prefix
-        avatar: data.avatar || null, // ✅ Use null instead of undefined to match type definition
-        balance: userBalance, // ✅ Set from platformScore
-        isActive: true,
-        joinedAt: new Date(),
-        socketId: client.id,
-      });
+      userId: data.userId,
+      email: data.userEmail,
+      username: data.username || data.userEmail.split('@')[0], // Fallback to email prefix
+      avatar: data.avatar || null, // ✅ Use null instead of undefined to match type definition
+      balance: userBalance, // ✅ Set from platformScore
+      isActive: true,
+      joinedAt: new Date(),
+      socketId: client.id,
+    });
       
       // Update table reference for rest of function
       table = currentTable;
@@ -2605,19 +2605,19 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       this.logger.log(`🔓 Lock released for ${data.userEmail} joining table ${data.tableId}`);
     }
     
-      // ✅ CRITICAL FIX: Join the Socket.IO room to receive game events!
-      const gameRoom = `table:${data.tableId}`;
-      client.join(gameRoom);
-      this.logger.log(`🎮 Client ${client.id} joined game room: ${gameRoom}`);
-      
+    // ✅ CRITICAL FIX: Join the Socket.IO room to receive game events!
+    const gameRoom = `table:${data.tableId}`;
+    client.join(gameRoom);
+    this.logger.log(`🎮 Client ${client.id} joined game room: ${gameRoom}`);
+    
       // ✅ UPDATE DATABASE with new player count AND ensure player is in table_players
-      (async () => {
-        try {
+    (async () => {
+      try {
           // Update currentPlayers count
-          await this.gameTablesRepository.update(data.tableId, {
-            currentPlayers: table.players.length,
-          });
-          this.logger.log(`💾 ✅ Database updated: Table ${data.tableId} now has ${table.players.length} players`);
+        await this.gameTablesRepository.update(data.tableId, {
+          currentPlayers: table.players.length,
+        });
+        this.logger.log(`💾 ✅ Database updated: Table ${data.tableId} now has ${table.players.length} players`);
           
           // ✅ FIX: Ensure player is in table_players table (for invitations)
           try {
@@ -2631,10 +2631,10 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
           } catch (dbError) {
             this.logger.warn(`⚠️ Could not ensure player in table_players: ${dbError.message}`);
           }
-        } catch (error) {
-          this.logger.error(`❌ Failed to update table in database: ${error.message}`);
-        }
-      })();
+      } catch (error) {
+        this.logger.error(`❌ Failed to update table in database: ${error.message}`);
+      }
+    })();
 
     
     const isCreator = data.userId === table.creatorId;
@@ -3050,28 +3050,28 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       this.logger.log(`🗑️ Table ${table.tableName} is now empty - removing from memory (preserving in database)`);
       
       // Delete from memory only (not from database)
-      this.activeTables.delete(data.tableId);
+          this.activeTables.delete(data.tableId);
       this.logger.log(`🗑️ Table ${table.tableName} removed from memory (no players)`);
-      
+          
       // ✅ PRESERVE IN DATABASE: Update table status instead of deleting
       // This allows tables to be reloaded on server restart
-      try {
+          try {
         await this.gameTablesRepository.update(data.tableId, {
           currentPlayers: 0,
           status: 'waiting', // Keep as waiting status
           updatedAt: new Date(),
         });
         this.logger.log(`💾 ✅ Preserved table ${data.tableId} in database (empty but available for restart recovery)`);
-      } catch (error) {
+          } catch (error) {
         this.logger.error(`❌ Failed to update table in database: ${error.message}`);
-      }
-      
+          }
+          
       // Broadcast table removal from lobby (since it's not active anymore)
-      this.server.to('lobby').emit('table_removed', {
+          this.server.to('lobby').emit('table_removed', {
         id: table.id,
-        reason: 'all_players_left',
-        timestamp: new Date(),
-      });
+            reason: 'all_players_left',
+            timestamp: new Date(),
+          });
       this.logger.log(`📢 Broadcasted table_removed to lobby for empty table ${table.tableName}`);
       
       return {
@@ -3251,15 +3251,15 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       // This ensures checkAndRemoveInsufficientPlayers uses correct balances
       const table = this.activeTables.get(tableId);
       if (table) {
-        const updatedBalances = (gameState as any).updatedBalances;
-        if (updatedBalances && Array.isArray(updatedBalances)) {
-          this.logger.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+      const updatedBalances = (gameState as any).updatedBalances;
+      if (updatedBalances && Array.isArray(updatedBalances)) {
+        this.logger.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
           this.logger.log(`💰 UPDATING IN-MEMORY BALANCES FROM WINNINGS`);
-          this.logger.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-          
-          for (const balanceUpdate of updatedBalances) {
-            const { userId, balance } = balanceUpdate;
-            this.logger.log(`   → User ${userId}: ${balance} SEKA`);
+        this.logger.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+        
+        for (const balanceUpdate of updatedBalances) {
+          const { userId, balance } = balanceUpdate;
+          this.logger.log(`   → User ${userId}: ${balance} SEKA`);
             
             // Update in-memory balance for this player
             const player = table.players.find(p => p.userId === userId);
@@ -3270,23 +3270,23 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
             } else {
               this.logger.warn(`   ⚠️ Player ${userId} not found in table ${tableId} - cannot update balance`);
             }
-            
-            // Emit to specific user's socket
-            const userSocket = await this.findUserSocket(userId);
-            if (userSocket) {
-              userSocket.emit('balance_updated', {
-                userId,
-                platformScore: balance,
-                reason: 'game_win',
-                timestamp: new Date()
-              });
-              this.logger.log(`   ✅ Sent balance update to ${userId}`);
-            } else {
-              this.logger.warn(`   ⚠️ Socket not found for user ${userId}`);
-            }
-          }
           
-          this.logger.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+          // Emit to specific user's socket
+          const userSocket = await this.findUserSocket(userId);
+          if (userSocket) {
+            userSocket.emit('balance_updated', {
+              userId,
+              platformScore: balance,
+              reason: 'game_win',
+              timestamp: new Date()
+            });
+            this.logger.log(`   ✅ Sent balance update to ${userId}`);
+          } else {
+            this.logger.warn(`   ⚠️ Socket not found for user ${userId}`);
+          }
+        }
+        
+        this.logger.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
         }
       }
       

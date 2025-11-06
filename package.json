@@ -21,7 +21,9 @@
     "migration:generate": "typeorm migration:generate -d src/config/typeorm.config.ts",
     "migration:run": "typeorm migration:run -d src/config/typeorm.config.ts",
     "migration:revert": "typeorm migration:revert -d src/config/typeorm.config.ts",
-    "seed": "ts-node src/database/seeds/run-seeds.ts"
+    "seed": "ts-node src/database/seeds/run-seeds.ts",
+    "db:init": "npm run build && node initialize-and-clean-database.js",
+    "db:clean": "npm run build && node initialize-and-clean-database.js"
   },
   "dependencies": {
     "@azure/msal-node": "^3.8.0",
