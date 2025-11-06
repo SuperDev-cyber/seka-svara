@@ -254,20 +254,34 @@ export class WalletService {
       // Execute blockchain transfer to user's wallet address
       let txHash: string;
       
-      if (withdrawDto.network === 'BEP20' && this.bscService) {
+      if (withdrawDto.network === 'BEP20') {
+        if (!this.bscService) {
+          throw new BadRequestException('BSC service not available. Please contact support.');
+        }
         this.logger.log(`📤 Sending ${withdrawDto.amount} USDT via BSC to ${withdrawDto.toAddress}`);
-        const result = await this.bscService.transfer(withdrawDto.toAddress, withdrawDto.amount.toString());
-        txHash = result.txHash;
-        this.logger.log(`✅ BSC transfer successful: ${txHash}`);
-      } else if (withdrawDto.network === 'TRC20' && this.tronService) {
+        try {
+          const result = await this.bscService.transfer(withdrawDto.toAddress, withdrawDto.amount.toString());
+          txHash = result.txHash;
+          this.logger.log(`✅ BSC transfer successful: ${txHash}`);
+        } catch (blockchainError) {
+          this.logger.error(`❌ BSC transfer error: ${blockchainError.message}`);
+          throw new BadRequestException(`Blockchain transfer failed: ${blockchainError.message}`);
+        }
+      } else if (withdrawDto.network === 'TRC20') {
+        if (!this.tronService) {
+          throw new BadRequestException('Tron service not available. Please contact support.');
+        }
         this.logger.log(`📤 Sending ${withdrawDto.amount} USDT via Tron to ${withdrawDto.toAddress}`);
-        const result = await this.tronService.transfer(withdrawDto.toAddress, withdrawDto.amount.toString());
-        txHash = result.txHash;
-        this.logger.log(`✅ Tron transfer successful: ${txHash}`);
+        try {
+          const result = await this.tronService.transfer(withdrawDto.toAddress, withdrawDto.amount.toString());
+          txHash = result.txHash;
+          this.logger.log(`✅ Tron transfer successful: ${txHash}`);
+        } catch (blockchainError) {
+          this.logger.error(`❌ Tron transfer error: ${blockchainError.message}`);
+          throw new BadRequestException(`Blockchain transfer failed: ${blockchainError.message}`);
+        }
       } else {
-        // Fallback: if blockchain services not available, log warning but still process
-        this.logger.warn(`⚠️ Blockchain service not available for ${withdrawDto.network}. Simulating withdrawal.`);
-        txHash = `simulated-${Date.now()}`;
+        throw new BadRequestException(`Unsupported network: ${withdrawDto.network}`);
       }
       
       // Update transaction with hash

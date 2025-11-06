@@ -52,8 +52,16 @@ export class BscService {
 
   async getBalance(address: string): Promise<string> {
     try {
+      if (!this.USDTContract) {
+        throw new Error('BSC service not initialized');
+      }
       const balance = await this.USDTContract.balanceOf(address);
-      const decimals = await this.USDTContract.decimals();
+      let decimals = 18; // BSC USDT typically uses 18 decimals
+      try {
+        decimals = await this.USDTContract.decimals();
+      } catch (error) {
+        this.logger.warn(`Could not get decimals, using default 18: ${error.message}`);
+      }
       return ethers.formatUnits(balance, decimals);
     } catch (error) {
       this.logger.error(`Failed to get BSC balance: ${error.message}`);
@@ -63,8 +71,20 @@ export class BscService {
 
   async transfer(to: string, amount: string): Promise<any> {
     try {
-      // TODO: Implement USDT transfer on BSC
-      const decimals = await this.USDTContract.decimals();
+      if (!this.USDTContract) {
+        throw new Error('BSC service not initialized. Please configure BSC_PRIVATE_KEY and BSC_USDT_CONTRACT.');
+      }
+
+      // USDT on BSC typically uses 18 decimals
+      // Try to get decimals from contract, fallback to 18 if it fails
+      let decimals = 18;
+      try {
+        decimals = await this.USDTContract.decimals();
+      } catch (error) {
+        this.logger.warn(`Could not get decimals from contract, using default 18: ${error.message}`);
+        decimals = 18; // BSC USDT typically uses 18 decimals
+      }
+
       const amountInWei = ethers.parseUnits(amount, decimals);
 
       const tx = await this.USDTContract.transfer(to, amountInWei);

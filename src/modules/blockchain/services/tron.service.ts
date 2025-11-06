@@ -49,8 +49,16 @@ export class TronService {
 
   async getBalance(address: string): Promise<string> {
     try {
+      if (!this.USDTContract || !this.tronWeb) {
+        throw new Error('Tron service not initialized');
+      }
       const balance = await this.USDTContract.balanceOf(address).call();
-      const decimals = await this.USDTContract.decimals().call();
+      let decimals = 6; // Default USDT decimals
+      try {
+        decimals = await this.USDTContract.decimals().call();
+      } catch (error) {
+        this.logger.warn(`Could not get decimals, using default 6: ${error.message}`);
+      }
       return (balance / Math.pow(10, decimals)).toString();
     } catch (error) {
       this.logger.error(`Failed to get Tron balance: ${error.message}`);
@@ -60,8 +68,20 @@ export class TronService {
 
   async transfer(to: string, amount: string): Promise<any> {
     try {
-      // TODO: Implement USDT transfer on Tron
-      const decimals = await this.USDTContract.decimals().call();
+      if (!this.USDTContract || !this.tronWeb) {
+        throw new Error('Tron service not initialized. Please configure TRON_PRIVATE_KEY and TRON_USDT_CONTRACT.');
+      }
+
+      // USDT on Tron uses 6 decimals
+      // Try to get decimals from contract, fallback to 6 if it fails
+      let decimals = 6;
+      try {
+        decimals = await this.USDTContract.decimals().call();
+      } catch (error) {
+        this.logger.warn(`Could not get decimals from contract, using default 6: ${error.message}`);
+        decimals = 6; // USDT standard decimals
+      }
+
       const amountInSun = parseFloat(amount) * Math.pow(10, decimals);
 
       const tx = await this.USDTContract.transfer(to, amountInSun).send();
