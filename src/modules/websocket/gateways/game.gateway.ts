@@ -148,9 +148,9 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
           }
         }
         
-        // ✅ FIX: Also check tables with 0 players (should be immediately deleted)
+        // ✅ FIX: Remove empty tables from memory only (preserve in database)
         if (table.players.length === 0) {
-          this.logger.log(`🗑️ Found empty table "${table.tableName}" in cleanup - deleting immediately`);
+          this.logger.log(`🗑️ Found empty table "${table.tableName}" in cleanup - removing from memory (preserving in database)`);
           tablesToDelete.push(tableId);
           continue;
         }
@@ -175,19 +175,24 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         }
       }
 
-      // Delete idle tables
+      // Delete idle tables from memory only (preserve in database for restart recovery)
       for (const tableId of tablesToDelete) {
         const table = this.activeTables.get(tableId);
         if (table) {
           this.activeTables.delete(tableId);
-          this.logger.log(`🗑️ Auto-deleted idle single-player table: ${table.tableName} (ID: ${table.id})`);
+          this.logger.log(`🗑️ Auto-removed idle table from memory: ${table.tableName} (ID: ${table.id})`);
           
-          // ✅ DELETE FROM DATABASE (ALL tables)
+          // ✅ PRESERVE IN DATABASE: Update status instead of deleting
+          // This allows tables to be reloaded on server restart
           try {
-            await this.gameTablesRepository.delete(tableId);
-            this.logger.log(`💾 ✅ Deleted table ${tableId} from database`);
+            await this.gameTablesRepository.update(tableId, {
+              currentPlayers: table.players.length,
+              status: 'waiting', // Keep as waiting status
+              updatedAt: new Date(),
+            });
+            this.logger.log(`💾 ✅ Preserved table ${tableId} in database (available for restart recovery)`);
           } catch (error) {
-            this.logger.error(`❌ Failed to delete table from database: ${error.message}`);
+            this.logger.error(`❌ Failed to update table in database: ${error.message}`);
           }
           
           // Notify lobby
@@ -197,17 +202,19 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
             timestamp: new Date(),
           });
 
-          // Notify the remaining player if they're connected
-          const player = table.players[0];
-          if (player) {
-            const socketId = this.userSockets.get(player.userId);
-            if (socketId) {
-              this.server.to(socketId).emit('table_closed', {
-                tableId: table.id,
-                tableName: table.tableName,
-                reason: 'No other players joined within 1 minute',
-                timestamp: new Date(),
-              });
+          // Notify the remaining player if they're connected (for single-player tables)
+          if (table.players.length > 0) {
+            const player = table.players[0];
+            if (player) {
+              const socketId = this.userSockets.get(player.userId);
+              if (socketId) {
+                this.server.to(socketId).emit('table_closed', {
+                  tableId: table.id,
+                  tableName: table.tableName,
+                  reason: 'No other players joined within 20 seconds',
+                  timestamp: new Date(),
+                });
+              }
             }
           }
         }
@@ -482,10 +489,21 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
             } catch (err) {
               this.logger.error(`   ❌ Failed updating DB player count: ${err.message}`);
             }
-            // Delete table if empty
+            // Remove table from memory if empty, but preserve in database
             if (after === 0) {
               this.activeTables.delete(tableId);
-              try { await this.gameTablesRepository.delete(tableId); } catch {}
+              this.logger.log(`   🗑️ Removed empty table ${table.tableName} from memory (preserved in database)`);
+              // ✅ PRESERVE IN DATABASE: Update status instead of deleting
+              try {
+                await this.gameTablesRepository.update(tableId, {
+                  currentPlayers: 0,
+                  status: 'waiting',
+                  updatedAt: new Date(),
+                });
+                this.logger.log(`   💾 ✅ Preserved table ${tableId} in database`);
+              } catch (err) {
+                this.logger.error(`   ❌ Failed to preserve table in database: ${err.message}`);
+              }
               this.server.to('lobby').emit('table_removed', { id: tableId, timestamp: new Date(), reason: 'all_players_left' });
             } else {
               this.server.to('lobby').emit('table_updated', {
@@ -1316,20 +1334,10 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
   ) {
     this.logger.log(`📋 GET_ACTIVE_TABLES request from client ${client.id}`);
 
-    // 1) Hard cleanup in DB: delete rows with zero participants
-    try {
-      const empties = await this.gameTablesRepository
-        .createQueryBuilder('t')
-        .select(['t.id'])
-        .where('t.currentPlayers = :zero', { zero: 0 })
-        .getMany();
-      for (const t of empties) {
-        await this.gameTablesRepository.delete(t.id);
-        this.server.to('lobby').emit('table_removed', { id: t.id, timestamp: new Date(), reason: 'no_participants' });
-      }
-    } catch (e) {
-      this.logger.error(`❌ Failed DB empty-table cleanup: ${e.message}`);
-    }
+    // ✅ FIX: Don't delete empty tables - preserve them for server restart recovery
+    // Empty tables are now preserved in database with currentPlayers = 0
+    // They will be filtered out from active_tables response but remain available for restart
+    this.logger.log(`📋 Preserving empty tables in database for restart recovery`);
 
     // 2) Return tables from DB only (currentPlayers > 0)
     const dbTables = await this.gameTablesRepository
@@ -3037,23 +3045,28 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     
     this.logger.log(`👋 Player ${data.userId} left table ${table.tableName} (${playersAfter}/${table.maxPlayers} remaining)`);
     
-    // ✅ FIX: Immediately delete table if it's COMPLETELY EMPTY (0 players)
+    // ✅ FIX: Remove from memory when empty, but KEEP in database for server restart recovery
     if (table.players.length === 0) {
-      this.logger.log(`🗑️ Table ${table.tableName} is now empty - deleting immediately`);
+      this.logger.log(`🗑️ Table ${table.tableName} is now empty - removing from memory (preserving in database)`);
       
-      // Delete from memory immediately
+      // Delete from memory only (not from database)
       this.activeTables.delete(data.tableId);
-      this.logger.log(`🗑️ Table ${table.tableName} deleted from memory (no players)`);
+      this.logger.log(`🗑️ Table ${table.tableName} removed from memory (no players)`);
       
-      // ✅ DELETE FROM DATABASE immediately when last player leaves
+      // ✅ PRESERVE IN DATABASE: Update table status instead of deleting
+      // This allows tables to be reloaded on server restart
       try {
-        await this.gameTablesRepository.delete(data.tableId);
-        this.logger.log(`💾 ✅ Deleted table ${data.tableId} from database (all players left)`);
+        await this.gameTablesRepository.update(data.tableId, {
+          currentPlayers: 0,
+          status: 'waiting', // Keep as waiting status
+          updatedAt: new Date(),
+        });
+        this.logger.log(`💾 ✅ Preserved table ${data.tableId} in database (empty but available for restart recovery)`);
       } catch (error) {
-        this.logger.error(`❌ Failed to delete table from database: ${error.message}`);
+        this.logger.error(`❌ Failed to update table in database: ${error.message}`);
       }
       
-      // Broadcast table removal to lobby immediately
+      // Broadcast table removal from lobby (since it's not active anymore)
       this.server.to('lobby').emit('table_removed', {
         id: table.id,
         reason: 'all_players_left',
@@ -3063,7 +3076,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       
       return {
         success: true,
-        message: 'Left table - table deleted (no players remaining)'
+        message: 'Left table - table removed from active lobby (preserved for restart)'
       };
     }
     
@@ -3426,9 +3439,21 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
           timestamp: new Date(),
         });
       } else {
-        // No players left - delete table
+        // No players left - remove from memory but preserve in database
         this.activeTables.delete(tableId);
-        this.logger.log(`🗑️ Table ${table.tableName} deleted - no players with sufficient balance`);
+        this.logger.log(`🗑️ Table ${table.tableName} removed from memory - no players with sufficient balance`);
+        
+        // ✅ PRESERVE IN DATABASE: Update status instead of deleting
+        try {
+          await this.gameTablesRepository.update(tableId, {
+            currentPlayers: 0,
+            status: 'waiting',
+            updatedAt: new Date(),
+          });
+          this.logger.log(`💾 ✅ Preserved table ${tableId} in database (available for restart recovery)`);
+        } catch (error) {
+          this.logger.error(`❌ Failed to update table in database: ${error.message}`);
+        }
         
         this.server.to('lobby').emit('table_removed', {
           id: table.id,
