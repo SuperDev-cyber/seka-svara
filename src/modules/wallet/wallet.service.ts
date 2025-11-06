@@ -294,9 +294,10 @@ export class WalletService {
     // 2. Transaction is related to user's addresses (fromAddress or toAddress)
     const transactions = await this.transactionsRepository
       .createQueryBuilder('transaction')
-      .where('transaction.walletId = :walletId', { walletId: wallet.id })
+      // walletId column is varchar in DB, compare by casting to uuid
+      .where('transaction."walletId"::uuid = :walletId', { walletId: wallet.id })
       .andWhere(
-        '(transaction.fromAddress IN (:...userAddresses) OR transaction.toAddress IN (:...userAddresses) OR transaction.walletId = :walletId)',
+        '(transaction.fromAddress IN (:...userAddresses) OR transaction.toAddress IN (:...userAddresses) OR transaction."walletId"::uuid = :walletId)',
         { 
           userAddresses: [wallet.bep20Address, wallet.trc20Address].filter(addr => !!addr),
           walletId: wallet.id 

@@ -233,7 +233,9 @@ export class AdminService {
           u.username,
           u.email
         FROM wallet_transactions wt
-        JOIN wallets w ON wt."walletId" = w.id
+        -- wallet_transactions.walletId is stored as varchar; wallets.id is uuid
+        -- Cast to avoid operator error (character varying = uuid)
+        JOIN wallets w ON wt."walletId"::uuid = w.id
         JOIN users u ON w."userId" = u.id
         ORDER BY wt."createdAt" DESC
         LIMIT $1 OFFSET $2
