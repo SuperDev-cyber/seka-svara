@@ -11,7 +11,6 @@ import { Server, Socket } from 'socket.io';
 import { Logger, UseGuards, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { ConfigService } from '@nestjs/config';
 import { GameService } from '../../game/game.service';
 import { GameEngine } from '../../game/services/game-engine.service';
 import { GameStateService } from '../../game/services/game-state.service';
@@ -69,6 +68,9 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
   // Map: tableId -> cleanup timer for single-player tables
   private cleanupTimers = new Map<string, NodeJS.Timeout>();
 
+  // Map: tableId -> Set of userIds currently joining (prevents race conditions)
+  private joiningPlayers = new Map<string, Set<string>>();
+
   // IN-MEMORY TABLE STORE (ephemeral - lost on restart)
   private activeTables = new Map<string, {
     id: string;
@@ -108,7 +110,6 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private readonly gameStateService: GameStateService,
     private readonly walletService: WalletService,
     private readonly emailService: EmailService,
-    private readonly configService: ConfigService,
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
     @InjectRepository(GameTable)
@@ -387,65 +388,6 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     } catch (error) {
       this.logger.error(`invite_request failed: ${error.message}`);
       return { success: false, error: error.message };
-    }
-  }
-
-  /**
-   * Send game invitation via email
-   */
-  @SubscribeMessage('invite_by_email')
-  async handleInviteByEmail(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: {
-      email: string;
-      tableId: string;
-      tableName: string;
-      entryFee: number;
-      inviterName: string;
-      inviterUserId: string;
-    },
-  ) {
-    try {
-      this.logger.log(`📧 Email invitation request received`);
-      this.logger.log(`   From: ${data.inviterName} (${data.inviterUserId})`);
-      this.logger.log(`   To: ${data.email}`);
-      this.logger.log(`   Table: ${data.tableName} (ID: ${data.tableId})`);
-      
-      // Generate game URL with table ID
-      const frontendUrl = this.configService.get('FRONTEND_URL') || 'https://seka-svara-frontend.vercel.app';
-      const gameUrl = `${frontendUrl}/game/${data.tableId}?invited=true`;
-      
-      // Send email invitation
-      const emailResult = await this.emailService.sendGameInvitation(
-        data.email,
-        data.inviterName,
-        data.tableName,
-        data.entryFee,
-        gameUrl,
-      );
-      
-      if (emailResult.success) {
-        this.logger.log(`✅ Email invitation sent successfully to ${data.email}`);
-        this.logger.log(`   Message ID: ${emailResult.messageId}`);
-        
-        return {
-          success: true,
-          message: `Invitation sent to ${data.email}`,
-          email: data.email,
-        };
-      } else {
-        this.logger.error(`❌ Failed to send email to ${data.email}: ${emailResult.error}`);
-        return {
-          success: false,
-          error: `Failed to send email: ${emailResult.error}`,
-        };
-      }
-    } catch (error) {
-      this.logger.error(`❌ Error in handleInviteByEmail: ${error.message}`);
-      return {
-        success: false,
-        error: error.message,
-      };
     }
   }
 
@@ -962,13 +904,6 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         
         // Reset modal tracking
         table.modalClosedPlayers = new Set<string>();
-        
-        // ✅ FIX: Wait 3 seconds to ensure all balance updates are committed to database
-        // This prevents the race condition where winners get removed because their
-        // balance update transaction hasn't completed yet
-        this.logger.log(`⏳ Waiting 3 seconds for all balance updates to commit to database...`);
-        await new Promise(resolve => setTimeout(resolve, 3000));
-        this.logger.log(`✅ Database commit delay complete, proceeding with balance check`);
         
         // Check if all players still have sufficient balance
         // This will remove players with insufficient balance and restart if enough players remain
@@ -2310,17 +2245,34 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       };
     }
     
-    // Check if already in table (allow rejoining - just update info)
+    // ✅ FIX RACE CONDITION: Check both in-memory AND database to prevent duplicate joins
     const existingPlayer = table.players.find(p => p.userId === data.userId);
-    if (existingPlayer) {
+    
+    // Also check database to catch race conditions where player was added but table not yet synced
+    let dbPlayerExists = false;
+    try {
+      const dbTable = await this.gameTablesRepository.findOne({ 
+        where: { id: data.tableId },
+        relations: ['players']
+      });
+      if (dbTable?.players) {
+        dbPlayerExists = dbTable.players.some(p => p.userId === data.userId);
+      }
+    } catch (error) {
+      this.logger.error(`Error checking database for existing player: ${error.message}`);
+    }
+    
+    if (existingPlayer || dbPlayerExists) {
       this.logger.log(`🔄 Player ${data.userEmail} already in table ${table.tableName} - rejoin allowed`);
       this.logger.log(`   Current table state: ${table.players.length} players`);
       
       // ✅ Update player data and socketId (CRITICAL for reconnects!)
-      existingPlayer.email = data.userEmail;
-      existingPlayer.socketId = client.id; // Update socket ID
-      if (data.username) existingPlayer.username = data.username;
-      if (data.avatar) existingPlayer.avatar = data.avatar;
+      if (existingPlayer) {
+        existingPlayer.email = data.userEmail;
+        existingPlayer.socketId = client.id; // Update socket ID
+        if (data.username) existingPlayer.username = data.username;
+        if (data.avatar) existingPlayer.avatar = data.avatar;
+      }
       
       // ✅ Update userSockets map
       this.userSockets.set(data.userId, client.id);
@@ -2369,13 +2321,17 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
           });
           
           // Start game after 10-second delay
+          const tableIdForTimer = table.id;
           const timer = setTimeout(() => {
-          this.autoStartGame(table.id);
-            this.countdownTimers.delete(table.id); // Clean up timer reference
+            const currentTable = this.activeTables.get(tableIdForTimer);
+            if (currentTable) {
+              this.autoStartGame(currentTable.id);
+              this.countdownTimers.delete(currentTable.id); // Clean up timer reference
+            }
           }, 10000); // 10 seconds
           
           // Store timer to prevent duplicates
-          this.countdownTimers.set(table.id, timer);
+          this.countdownTimers.set(tableIdForTimer, timer);
         } else {
           this.logger.log(`⏱️ Countdown already in progress for table ${table.tableName} (rejoin)`);
         }
@@ -2401,40 +2357,106 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       };
     }
     
-    // Check if table is full
-    if (table.players.length >= table.maxPlayers) {
-      this.logger.log(`❌ Join failed: Table ${table.tableName} is full (${table.players.length}/${table.maxPlayers})`);
+    // ✅ FIX RACE CONDITION: Use joining lock to prevent simultaneous joins
+    if (!this.joiningPlayers.has(data.tableId)) {
+      this.joiningPlayers.set(data.tableId, new Set<string>());
+    }
+    const joiningSet = this.joiningPlayers.get(data.tableId)!;
+    
+    // Check if this user is already in the process of joining
+    if (joiningSet.has(data.userId)) {
+      this.logger.warn(`⚠️ Player ${data.userEmail} is already joining table ${data.tableId} - blocking duplicate join`);
       return {
         success: false,
-        message: 'Table is full'
+        message: 'You are already joining this table. Please wait...',
       };
     }
     
-    // ✅ FIX: Fetch user's platformScore from database to set initial balance
-    let userBalance = 0;
-    try {
-      const userRecord = await this.usersRepository.findOne({ where: { id: data.userId } });
-      if (userRecord && userRecord.platformScore !== null && userRecord.platformScore !== undefined) {
-        userBalance = Math.round(Number(userRecord.platformScore));
-        this.logger.log(`💰 Fetched platformScore for ${data.userEmail}: ${userBalance} SEKA`);
-      } else {
-        this.logger.warn(`⚠️ No platformScore found for ${data.userEmail}, defaulting to 0`);
-      }
-    } catch (error) {
-      this.logger.error(`❌ Error fetching user platformScore: ${error.message}`);
-    }
+    // Add to joining set (lock)
+    joiningSet.add(data.userId);
+    this.logger.log(`🔒 Lock acquired for ${data.userEmail} joining table ${data.tableId}`);
     
-    // Add player with real user data and balance
-    table.players.push({
-      userId: data.userId,
-      email: data.userEmail,
-      username: data.username || data.userEmail.split('@')[0], // Fallback to email prefix
-      avatar: data.avatar || null, // ✅ Use null instead of undefined to match type definition
-      balance: userBalance, // ✅ Set from platformScore
-      isActive: true,
-      joinedAt: new Date(),
-      socketId: client.id,
-    });
+    try {
+      // ✅ FIX: Fetch user's platformScore from database to set initial balance
+      let userBalance = 0;
+      try {
+        const userRecord = await this.usersRepository.findOne({ where: { id: data.userId } });
+        if (userRecord && userRecord.platformScore !== null && userRecord.platformScore !== undefined) {
+          userBalance = Math.round(Number(userRecord.platformScore));
+          this.logger.log(`💰 Fetched platformScore for ${data.userEmail}: ${userBalance} SEKA`);
+        } else {
+          this.logger.warn(`⚠️ No platformScore found for ${data.userEmail}, defaulting to 0`);
+        }
+      } catch (error) {
+        this.logger.error(`❌ Error fetching user platformScore: ${error.message}`);
+      }
+      
+      // ✅ FIX RACE CONDITION: Double-check player doesn't exist right before adding (atomic check with lock)
+      // Re-fetch table to ensure we have latest state
+      const currentTable = this.activeTables.get(data.tableId);
+      if (!currentTable) {
+        joiningSet.delete(data.userId);
+        return {
+          success: false,
+          message: 'Table not found'
+        };
+      }
+      
+      const duplicateCheck = currentTable.players.find(p => p.userId === data.userId);
+      if (duplicateCheck) {
+        this.logger.warn(`⚠️ Race condition detected: Player ${data.userEmail} already in table (duplicate join attempt blocked)`);
+        joiningSet.delete(data.userId);
+        return {
+          success: false,
+          message: 'You are already in this table',
+          players: currentTable.players.map(p => ({
+            userId: p.userId,
+            email: p.email,
+            username: p.username,
+            avatar: p.avatar,
+            balance: p.balance,
+            isActive: p.isActive,
+            joinedAt: p.joinedAt
+          })),
+          currentPlayers: currentTable.players.length,
+          maxPlayers: currentTable.maxPlayers,
+          tableName: currentTable.tableName,
+          entryFee: currentTable.entryFee
+        };
+      }
+      
+      // Check if table is still not full (could have changed while we were fetching)
+      if (currentTable.players.length >= currentTable.maxPlayers) {
+        this.logger.log(`❌ Join failed: Table ${currentTable.tableName} is full (${currentTable.players.length}/${currentTable.maxPlayers})`);
+        joiningSet.delete(data.userId);
+        return {
+          success: false,
+          message: 'Table is full'
+        };
+      }
+    
+      // Add player with real user data and balance
+      currentTable.players.push({
+        userId: data.userId,
+        email: data.userEmail,
+        username: data.username || data.userEmail.split('@')[0], // Fallback to email prefix
+        avatar: data.avatar || null, // ✅ Use null instead of undefined to match type definition
+        balance: userBalance, // ✅ Set from platformScore
+        isActive: true,
+        joinedAt: new Date(),
+        socketId: client.id,
+      });
+      
+      // Update table reference for rest of function
+      table = currentTable;
+    } finally {
+      // Release lock
+      joiningSet.delete(data.userId);
+      if (joiningSet.size === 0) {
+        this.joiningPlayers.delete(data.tableId);
+      }
+      this.logger.log(`🔓 Lock released for ${data.userEmail} joining table ${data.tableId}`);
+    }
     
     // ✅ CRITICAL FIX: Join the Socket.IO room to receive game events!
     const gameRoom = `table:${data.tableId}`;
@@ -3068,33 +3090,47 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       this.logger.log(`   Winners: ${gameState.winners.join(', ')}`);
       this.logger.log(`   Pot: ${gameState.pot}`);
       
-      // ✅ Emit updated balances to winners for real-time UI update
-      const updatedBalances = (gameState as any).updatedBalances;
-      if (updatedBalances && Array.isArray(updatedBalances)) {
-        this.logger.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-        this.logger.log(`💰 EMITTING BALANCE UPDATES`);
-        this.logger.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-        
-        for (const balanceUpdate of updatedBalances) {
-          const { userId, balance } = balanceUpdate;
-          this.logger.log(`   → User ${userId}: ${balance} SEKA`);
+      // ✅ FIX: Update in-memory player balances immediately when winnings are distributed
+      // This ensures checkAndRemoveInsufficientPlayers uses correct balances
+      const table = this.activeTables.get(tableId);
+      if (table) {
+        const updatedBalances = (gameState as any).updatedBalances;
+        if (updatedBalances && Array.isArray(updatedBalances)) {
+          this.logger.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+          this.logger.log(`💰 UPDATING IN-MEMORY BALANCES FROM WINNINGS`);
+          this.logger.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
           
-          // Emit to specific user's socket
-          const userSocket = await this.findUserSocket(userId);
-          if (userSocket) {
-            userSocket.emit('balance_updated', {
-              userId,
-              platformScore: balance,
-              reason: 'game_win',
-              timestamp: new Date()
-            });
-            this.logger.log(`   ✅ Sent balance update to ${userId}`);
-          } else {
-            this.logger.warn(`   ⚠️ Socket not found for user ${userId}`);
+          for (const balanceUpdate of updatedBalances) {
+            const { userId, balance } = balanceUpdate;
+            this.logger.log(`   → User ${userId}: ${balance} SEKA`);
+            
+            // Update in-memory balance for this player
+            const player = table.players.find(p => p.userId === userId);
+            if (player) {
+              const oldBalance = player.balance || 0;
+              player.balance = balance;
+              this.logger.log(`   ✅ Updated in-memory balance for ${userId}: ${oldBalance} → ${balance}`);
+            } else {
+              this.logger.warn(`   ⚠️ Player ${userId} not found in table ${tableId} - cannot update balance`);
+            }
+            
+            // Emit to specific user's socket
+            const userSocket = await this.findUserSocket(userId);
+            if (userSocket) {
+              userSocket.emit('balance_updated', {
+                userId,
+                platformScore: balance,
+                reason: 'game_win',
+                timestamp: new Date()
+              });
+              this.logger.log(`   ✅ Sent balance update to ${userId}`);
+            } else {
+              this.logger.warn(`   ⚠️ Socket not found for user ${userId}`);
+            }
           }
+          
+          this.logger.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
         }
-        
-        this.logger.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
       }
       
       // If game completed, send completion event
@@ -3143,17 +3179,34 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       this.logger.log(`👑 Next dealer will be: ${table.lastWinnerId}`);
     }
     
-    // ❌ REMOVED: Don't check balances immediately after game completion
-    // This causes a race condition where winners get removed because their
-    // balance update hasn't been committed to the database yet.
-    // Balance check now happens only after the 10-second restart countdown
-    // in handleWinnerModalClosed() after a 3-second delay for DB commits.
-    this.logger.log(`⏳ Skipping immediate balance check to avoid race condition`);
-    this.logger.log(`   Balance check will occur after restart countdown (13 seconds delay)`);
+    // ✅ FIX: Wait a brief moment to ensure database writes are committed
+    // Then refresh balances from database before checking
+    await new Promise(resolve => setTimeout(resolve, 500)); // 500ms delay
+    
+    // Refresh all player balances from database to ensure we have latest values
+    const tableForCheck = this.activeTables.get(tableId);
+    if (tableForCheck) {
+      this.logger.log(`💰 Refreshing player balances from database before checking...`);
+      for (const player of tableForCheck.players) {
+        try {
+          const balanceData = await this.walletService.getBalance(player.userId);
+          const platformScore = balanceData.platformScore || 0;
+          const oldBalance = player.balance || 0;
+          player.balance = platformScore;
+          this.logger.log(`   Player ${player.email}: ${oldBalance} → ${platformScore} SEKA`);
+        } catch (error) {
+          this.logger.error(`Error refreshing balance for ${player.userId}: ${error.message}`);
+        }
+      }
+    }
+    
+    // Auto-remove players with insufficient balance after game ends
+    await this.checkAndRemoveInsufficientPlayers(tableId);
   }
   
   /**
    * Check player balances and remove those who can't afford entry fee
+   * ✅ FIX: Uses platformScore for gameplay balance (not wallet availableBalance)
    */
   private async checkAndRemoveInsufficientPlayers(tableId: string) {
     const table = this.activeTables.get(tableId);
@@ -3167,23 +3220,29 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     for (const player of table.players) {
       try {
         const balanceData = await this.walletService.getBalance(player.userId);
-        const availableBalance = balanceData.availableBalance;
+        // ✅ FIX: Use platformScore for gameplay, not availableBalance (wallet balance)
+        const platformScore = balanceData.platformScore || 0;
         
-        if (availableBalance < table.entryFee) {
-          this.logger.log(`   ❌ ${player.email}: Balance ${availableBalance} < Entry fee ${table.entryFee} - REMOVING`);
+        // ✅ FIX: Also update in-memory balance to keep it in sync
+        player.balance = platformScore;
+        
+        this.logger.log(`   Player ${player.email}: platformScore=${platformScore}, Entry fee=${table.entryFee}`);
+        
+        if (platformScore < table.entryFee) {
+          this.logger.log(`   ❌ ${player.email}: Balance ${platformScore} < Entry fee ${table.entryFee} - REMOVING`);
           removedPlayers.push(player.userId);
           
           // Notify the player they were removed
           this.server.to(`table:${tableId}`).emit('player_removed_insufficient_balance', {
             tableId,
             userId: player.userId,
-            balance: availableBalance,
+            balance: platformScore,
             entryFee: table.entryFee,
-            message: 'You have been removed from the table due to insufficient balance',
+            message: `You have been removed from the table. Your balance (${platformScore}) is less than the entry fee (${table.entryFee}).`,
             timestamp: new Date(),
           });
         } else {
-          this.logger.log(`   ✅ ${player.email}: Balance ${availableBalance} ≥ Entry fee ${table.entryFee} - OK`);
+          this.logger.log(`   ✅ ${player.email}: Balance ${platformScore} ≥ Entry fee ${table.entryFee} - OK`);
         }
       } catch (error) {
         this.logger.error(`Error checking balance for ${player.userId}: ${error.message}`);
