@@ -148,6 +148,13 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
           }
         }
         
+        // ✅ FIX: Also check tables with 0 players (should be immediately deleted)
+        if (table.players.length === 0) {
+          this.logger.log(`🗑️ Found empty table "${table.tableName}" in cleanup - deleting immediately`);
+          tablesToDelete.push(tableId);
+          continue;
+        }
+        
         // Only check tables with exactly 1 player (CHANGED: from 1 minute to 20 seconds)
         if (table.players.length === 1) {
           // If singlePlayerSince is not set, set it now (for old tables)
@@ -1125,6 +1132,19 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       }
     } catch (error) {
       this.logger.error(`❌ Error fetching creator platformScore: ${error.message}`);
+    }
+    
+    // ✅ NEW: Check if creator has sufficient balance (2x entry fee required)
+    const requiredBalance = data.entryFee * 2;
+    if (creatorBalance < requiredBalance) {
+      this.logger.warn(`❌ Creator ${data.creatorEmail} has insufficient balance: ${creatorBalance} < ${requiredBalance} (2x entry fee)`);
+      return {
+        success: false,
+        message: `Insufficient balance. You need at least ${requiredBalance} SEKA (2x entry fee of ${data.entryFee}) to create this table. Your current balance: ${creatorBalance} SEKA`,
+        balance: creatorBalance,
+        requiredBalance: requiredBalance,
+        entryFee: data.entryFee,
+      };
     }
     
     // Automatically add creator to the table
@@ -2402,6 +2422,20 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         };
       }
       
+      // ✅ NEW: Check if user has sufficient balance (2x entry fee required)
+      const requiredBalance = currentTable.entryFee * 2;
+      if (userBalance < requiredBalance) {
+        this.logger.warn(`❌ User ${data.userEmail} has insufficient balance: ${userBalance} < ${requiredBalance} (2x entry fee)`);
+        joiningSet.delete(data.userId);
+        return {
+          success: false,
+          message: `Insufficient balance. You need at least ${requiredBalance} SEKA (2x entry fee of ${currentTable.entryFee}) to join this table. Your current balance: ${userBalance} SEKA`,
+          balance: userBalance,
+          requiredBalance: requiredBalance,
+          entryFee: currentTable.entryFee,
+        };
+      }
+      
       const duplicateCheck = currentTable.players.find(p => p.userId === data.userId);
       if (duplicateCheck) {
         this.logger.warn(`⚠️ Race condition detected: Player ${data.userEmail} already in table (duplicate join attempt blocked)`);
@@ -2884,42 +2918,33 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     
     this.logger.log(`👋 Player ${data.userId} left table ${table.tableName} (${playersAfter}/${table.maxPlayers} remaining)`);
     
-    // ONLY delete if table is COMPLETELY EMPTY (0 players)
+    // ✅ FIX: Immediately delete table if it's COMPLETELY EMPTY (0 players)
     if (table.players.length === 0) {
-      // ✅ FIX: Add 5-second delay before deleting empty table
-      this.logger.log(`⏱️ Table ${table.tableName} is now empty - will delete in 5 seconds if still empty`);
+      this.logger.log(`🗑️ Table ${table.tableName} is now empty - deleting immediately`);
       
-      setTimeout(async () => {
-        // Re-check if table still exists and is still empty
-        const currentTable = this.activeTables.get(data.tableId);
-        if (currentTable && currentTable.players.length === 0) {
-          this.activeTables.delete(data.tableId);
-          this.logger.log(`🗑️ Table ${currentTable.tableName} deleted after 5-second delay - NO PLAYERS REJOINED`);
-          
-          // ✅ DELETE FROM DATABASE when last player leaves (ALL tables)
-          try {
-            await this.gameTablesRepository.delete(data.tableId);
-            this.logger.log(`💾 ✅ Deleted table ${data.tableId} from database (last player left)`);
-          } catch (error) {
-            this.logger.error(`❌ Failed to delete table from database: ${error.message}`);
-          }
-          
-          // Broadcast table removal
-          this.server.to('lobby').emit('table_removed', {
-            id: currentTable.id,
-            reason: 'all_players_left',
-            timestamp: new Date(),
-          });
-        } else if (currentTable) {
-          this.logger.log(`✅ Table ${currentTable.tableName} NOT deleted - players rejoined (${currentTable.players.length} players)`);
-        } else {
-          this.logger.log(`⚠️ Table ${data.tableId} already deleted by another process`);
-        }
-      }, 5000); // 5 seconds delay
+      // Delete from memory immediately
+      this.activeTables.delete(data.tableId);
+      this.logger.log(`🗑️ Table ${table.tableName} deleted from memory (no players)`);
+      
+      // ✅ DELETE FROM DATABASE immediately when last player leaves
+      try {
+        await this.gameTablesRepository.delete(data.tableId);
+        this.logger.log(`💾 ✅ Deleted table ${data.tableId} from database (all players left)`);
+      } catch (error) {
+        this.logger.error(`❌ Failed to delete table from database: ${error.message}`);
+      }
+      
+      // Broadcast table removal to lobby immediately
+      this.server.to('lobby').emit('table_removed', {
+        id: table.id,
+        reason: 'all_players_left',
+        timestamp: new Date(),
+      });
+      this.logger.log(`📢 Broadcasted table_removed to lobby for empty table ${table.tableName}`);
       
       return {
         success: true,
-        message: 'Left table - table will be deleted in 5 seconds if empty'
+        message: 'Left table - table deleted (no players remaining)'
       };
     }
     
