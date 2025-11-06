@@ -538,13 +538,13 @@ export class WalletService {
       0
     );
     
-    // Calculate max withdrawable (totalWagered / 1.3)
-    const maxWithdrawable = totalWagered / 1.3;
+    // Users can withdraw their full balance - no wagering requirements
+    const maxWithdrawable = parseFloat(user.balance?.toString() || '0');
     
     this.logger.log(`📊 Wagering Stats for ${user.email}:`);
     this.logger.log(`   💰 Total Deposited: ${totalDeposited} SEKA`);
     this.logger.log(`   🎲 Total Wagered: ${totalWagered} SEKA`);
-    this.logger.log(`   💸 Max Withdrawable: ${maxWithdrawable.toFixed(0)} SEKA`);
+    this.logger.log(`   💸 Max Withdrawable (Full Balance): ${maxWithdrawable.toFixed(0)} SEKA`);
     this.logger.log(`   🎮 Game Transactions: ${gameTransactions.length}`);
     
     return {
