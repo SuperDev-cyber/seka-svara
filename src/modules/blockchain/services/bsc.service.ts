@@ -123,6 +123,97 @@ export class BscService {
     }
   }
 
+  /**
+   * Verify USDT transfer transaction
+   * Checks if the transaction is a USDT transfer to the specified recipient address
+   */
+  async verifyUSDTTransfer(txHash: string, expectedTo: string, expectedAmount?: string): Promise<any> {
+    try {
+      if (!this.USDTContract) {
+        throw new Error('BSC service not initialized');
+      }
+
+      const receipt = await this.provider.getTransactionReceipt(txHash);
+      if (!receipt) {
+        return { verified: false, message: 'Transaction not found' };
+      }
+
+      if (receipt.status !== 1) {
+        return { verified: false, message: 'Transaction failed' };
+      }
+
+      // Parse Transfer event from USDT contract
+      const transferEventSignature = ethers.id('Transfer(address,address,uint256)');
+      const usdtContractAddress = typeof this.USDTContract.target === 'string' 
+        ? this.USDTContract.target 
+        : await this.USDTContract.target.getAddress();
+      const transferEvents = receipt.logs.filter(log => {
+        // Check if this log is from USDT contract
+        return log.address.toLowerCase() === usdtContractAddress.toLowerCase() &&
+               log.topics[0] === transferEventSignature;
+      });
+
+      if (transferEvents.length === 0) {
+        return { verified: false, message: 'No USDT transfer found in transaction' };
+      }
+
+      // Parse the Transfer event using contract interface
+      // Transfer(address indexed from, address indexed to, uint256 value)
+      // topics[0] = event signature
+      // topics[1] = from address (indexed)
+      // topics[2] = to address (indexed)
+      // data = amount (uint256, not indexed)
+      const transferEvent = transferEvents[0];
+      const fromAddress = ethers.getAddress('0x' + transferEvent.topics[1].slice(-40));
+      const toAddress = ethers.getAddress('0x' + transferEvent.topics[2].slice(-40));
+      
+      // Decode the amount from data (uint256)
+      // data is a hex string, convert to BigInt
+      const amountHex = transferEvent.data;
+      const amount = BigInt(amountHex);
+
+      // Get decimals
+      let decimals = 18;
+      try {
+        decimals = await this.USDTContract.decimals();
+      } catch (error) {
+        this.logger.warn(`Could not get decimals, using default 18: ${error.message}`);
+      }
+
+      const amountFormatted = ethers.formatUnits(amount, decimals);
+
+      // Verify recipient address matches (case-insensitive)
+      const expectedToLower = expectedTo.toLowerCase();
+      const toAddressLower = toAddress.toLowerCase();
+      const recipientMatches = expectedToLower === toAddressLower;
+
+      // Verify amount if provided
+      let amountMatches = true;
+      if (expectedAmount) {
+        const expectedAmountBig = ethers.parseUnits(expectedAmount, decimals);
+        const tolerance = BigInt(10 ** (decimals - 6)); // Allow small tolerance for rounding
+        amountMatches = (amount >= expectedAmountBig - tolerance) && (amount <= expectedAmountBig + tolerance);
+      }
+
+      return {
+        verified: receipt.status === 1 && recipientMatches && amountMatches,
+        blockNumber: receipt.blockNumber,
+        confirmations: await receipt.confirmations(),
+        from: fromAddress,
+        to: toAddress,
+        amount: amountFormatted,
+        recipientMatches,
+        amountMatches,
+        message: recipientMatches && amountMatches 
+          ? 'Transaction verified successfully' 
+          : `Verification failed: recipient=${recipientMatches}, amount=${amountMatches}`,
+      };
+    } catch (error) {
+      this.logger.error(`Failed to verify USDT transfer: ${error.message}`);
+      throw error;
+    }
+  }
+
   async estimateGas(to: string, amount: string): Promise<string> {
     try {
       const decimals = await this.USDTContract.decimals();

@@ -201,15 +201,57 @@ export class WalletService {
     
     this.logger.log(`✅ Transaction record created: ${transaction.id}`);
     
-    // TODO: In production, verify the transaction on blockchain:
-    // 1. Check that txHash exists on blockchain
-    // 2. Verify recipient is admin address
-    // 3. Verify amount matches
-    // 4. Wait for confirmations (6+ for security)
-    // 
-    // For now, we'll auto-confirm for testing
-    this.logger.warn(`⚠️ AUTO-CONFIRMING FOR TESTING - In production, verify blockchain first!`);
-    await this.confirmDeposit(transaction.id);
+    // ✅ Verify the transaction on blockchain before confirming
+    try {
+      this.logger.log(`🔍 Verifying transaction on blockchain: ${depositDto.txHash}`);
+      
+      if (depositDto.network === 'BEP20' && this.bscService) {
+        // Verify USDT transfer transaction
+        const verification = await this.bscService.verifyUSDTTransfer(
+          depositDto.txHash,
+          adminAddress,
+          depositDto.amount.toString()
+        );
+        
+        this.logger.log(`📊 Verification result:`, verification);
+        
+        if (!verification.verified) {
+          this.logger.error(`❌ Transaction verification failed: ${verification.message}`);
+          transaction.status = TransactionStatus.FAILED;
+          await this.transactionsRepository.save(transaction);
+          throw new BadRequestException(`Transaction verification failed: ${verification.message}`);
+        }
+        
+        // Check confirmations (wait for at least 1 confirmation)
+        if (verification.confirmations < 1) {
+          this.logger.warn(`⚠️ Transaction has ${verification.confirmations} confirmations, waiting...`);
+          // In production, you might want to wait or use a job queue
+        }
+        
+        this.logger.log(`✅ Transaction verified successfully!`);
+        this.logger.log(`   From: ${verification.from}`);
+        this.logger.log(`   To: ${verification.to}`);
+        this.logger.log(`   Amount: ${verification.amount} USDT`);
+        this.logger.log(`   Confirmations: ${verification.confirmations}`);
+      } else if (depositDto.network === 'TRC20' && this.tronService) {
+        // TODO: Implement Tron verification
+        this.logger.warn(`⚠️ Tron verification not yet implemented, auto-confirming`);
+      } else {
+        this.logger.warn(`⚠️ Blockchain service not available for ${depositDto.network}, auto-confirming`);
+      }
+      
+      // Confirm the deposit after verification
+      await this.confirmDeposit(transaction.id);
+    } catch (error) {
+      this.logger.error(`❌ Deposit verification/confirmation error: ${error.message}`);
+      if (error instanceof BadRequestException) {
+        throw error;
+      }
+      // If verification fails but it's not a BadRequest, mark as failed
+      transaction.status = TransactionStatus.FAILED;
+      await this.transactionsRepository.save(transaction);
+      throw new BadRequestException(`Deposit processing failed: ${error.message}`);
+    }
     
     return transaction;
   }
@@ -298,16 +340,16 @@ export class WalletService {
       
       // Update wallet balance
       wallet.availableBalance = Math.max(0, wallet.availableBalance - withdrawDto.amount);
-      await this.walletsRepository.save(wallet);
-      
+    await this.walletsRepository.save(wallet);
+    
       // Confirm the withdrawal
       transaction.status = TransactionStatus.CONFIRMED;
       transaction.confirmedAt = new Date();
       await this.transactionsRepository.save(transaction);
       
       this.logger.log(`✅ Withdrawal completed: ${withdrawDto.amount} USDT sent to ${withdrawDto.toAddress}`);
-      
-      return transaction;
+    
+    return transaction;
     } catch (error) {
       this.logger.error(`❌ Withdrawal failed: ${error.message}`);
       transaction.status = TransactionStatus.FAILED;

@@ -10,7 +10,7 @@
 export const ADMIN_WALLETS = {
   // Binance Smart Chain (BEP20) - BSC Network
   BEP20: {
-    address: '0x1B897572F0d4714691C00F52Ff4c4955Fb94c6d1', // 🔴 REPLACE WITH ACTUAL BEP20 WALLET
+    address: '0x684ac954a4b55340d539656d7a93a09724067b66', // ✅ Deposit address - all deposits go here
     network: 'BSC',
     chainId: 56, // BSC Mainnet
     testnetChainId: 97, // BSC Testnet
