@@ -215,14 +215,15 @@ export class WalletService {
       description: `Deposit ${depositAmount} USDT via ${depositDto.network}`,
       metadata: {
         // ✅ Explicitly set each field to avoid BigInt from spread operator
-        network: depositDto.network,
-        fromAddress: depositDto.fromAddress,
-        txHash: depositDto.txHash,
-        amount: depositAmount, // ✅ Ensure metadata also has number, not BigInt
-        userDepositAddress,
-        userBalanceBefore: typeof user.balance === 'bigint' 
+        // ✅ Ensure all values are primitives (string, number, boolean) - no BigInt
+        network: String(depositDto.network || ''),
+        fromAddress: String(depositDto.fromAddress || ''),
+        txHash: String(depositDto.txHash || ''),
+        amount: Number(depositAmount), // ✅ Explicitly convert to number
+        userDepositAddress: String(userDepositAddress || ''),
+        userBalanceBefore: Number(typeof user.balance === 'bigint' 
           ? Number(user.balance) 
-          : parseFloat(user.balance?.toString() || '0'),
+          : parseFloat(user.balance?.toString() || '0')),
       },
     });
     
