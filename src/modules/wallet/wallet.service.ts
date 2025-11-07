@@ -151,8 +151,8 @@ export class WalletService {
   /**
    * Process deposit
    * 
-   * NEW FLOW:
-   * 1. User sends USDT from their wallet to ADMIN wallet address
+   * SIMPLIFIED FLOW:
+   * 1. User sends USDT from their wallet to their unique deposit address
    * 2. Backend verifies the transaction on blockchain
    * 3. Backend credits virtual balance to user's account (user.balance in DB)
    * 4. User plays games with virtual balance
@@ -165,8 +165,25 @@ export class WalletService {
       throw new NotFoundException('User not found');
     }
     
-    // Get admin wallet address for this network
-    const adminAddress = getAdminWalletAddress(depositDto.network as 'BEP20' | 'TRC20');
+    // ✅ Get user's unique deposit address for this network
+    let userDepositAddress: string;
+    if (depositDto.network === 'BEP20') {
+      if (!wallet.bep20Address) {
+        // Generate address if it doesn't exist
+        wallet.bep20Address = this.addressGeneratorService.generateBEP20Address(userId);
+        await this.walletsRepository.save(wallet);
+      }
+      userDepositAddress = wallet.bep20Address;
+    } else if (depositDto.network === 'TRC20') {
+      if (!wallet.trc20Address) {
+        // Generate address if it doesn't exist
+        wallet.trc20Address = this.addressGeneratorService.generateTRC20Address(userId);
+        await this.walletsRepository.save(wallet);
+      }
+      userDepositAddress = wallet.trc20Address;
+    } else {
+      throw new BadRequestException('Invalid network type');
+    }
     
     this.logger.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
     this.logger.log(`💰 DEPOSIT REQUEST`);
@@ -175,7 +192,7 @@ export class WalletService {
     this.logger.log(`💵 Amount: ${depositDto.amount} USDT`);
     this.logger.log(`🌐 Network: ${depositDto.network}`);
     this.logger.log(`📤 From Address: ${depositDto.fromAddress}`);
-    this.logger.log(`📥 To Address (ADMIN): ${adminAddress}`);
+    this.logger.log(`📥 To Address (USER UNIQUE): ${userDepositAddress}`);
     this.logger.log(`🔗 Tx Hash: ${depositDto.txHash}`);
     this.logger.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
     
@@ -192,13 +209,13 @@ export class WalletService {
       network: depositDto.network as NetworkType,
       amount: depositAmount, // ✅ Guaranteed to be a number
       fromAddress: depositDto.fromAddress,
-      toAddress: adminAddress, // ✅ Now using admin wallet address
+      toAddress: userDepositAddress, // ✅ Using user's unique deposit address
       txHash: depositDto.txHash,
       description: `Deposit ${depositAmount} USDT via ${depositDto.network}`,
       metadata: {
         ...depositDto,
         amount: depositAmount, // ✅ Ensure metadata also has number, not BigInt
-        adminAddress,
+        userDepositAddress,
         userBalanceBefore: typeof user.balance === 'bigint' 
           ? Number(user.balance) 
           : parseFloat(user.balance?.toString() || '0'),
@@ -214,10 +231,10 @@ export class WalletService {
       this.logger.log(`🔍 Verifying transaction on blockchain: ${depositDto.txHash}`);
       
       if (depositDto.network === 'BEP20' && this.bscService) {
-        // Verify USDT transfer transaction
+        // ✅ Verify USDT transfer transaction to user's unique address
         const verification = await this.bscService.verifyUSDTTransfer(
           depositDto.txHash,
-          adminAddress,
+          userDepositAddress, // ✅ Verify it went to user's unique address
           depositDto.amount.toString()
         );
         
