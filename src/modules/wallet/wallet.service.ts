@@ -508,16 +508,16 @@ export class WalletService {
     wallet.balance = Number(currentWalletBalance) + Number(depositAmount);
     wallet.availableBalance = Number(currentAvailableBalance) + Number(depositAmount);
     
-    // Save to database
-    await this.transactionsRepository.save(transaction);
-    await this.walletsRepository.save(wallet);
-    await this.usersRepository.save(user);
-    
     // 2. Update Seka-Svara Score (management tracking) - MIRRORS SEKA BALANCE
     // ✅ Directly update platform score (simpler approach)
     user.platformScore = Number(newPlatformScore);
     
-    // Also record the transaction for tracking
+    // Save to database - all values are now numbers, no BigInt mixing
+    await this.transactionsRepository.save(transaction);
+    await this.walletsRepository.save(wallet);
+    await this.usersRepository.save(user);
+    
+    // Also record the transaction for tracking (optional - don't fail if this errors)
     try {
       await this.platformScoreService.addScore(
         user.id,
