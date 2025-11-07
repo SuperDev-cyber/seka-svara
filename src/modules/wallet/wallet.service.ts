@@ -221,7 +221,26 @@ export class WalletService {
           depositDto.amount.toString()
         );
         
-        this.logger.log(`📊 Verification result:`, verification);
+        // ✅ Convert all verification values to safe types before logging or comparing
+        const confirmationsNum = typeof verification.confirmations === 'bigint' 
+          ? Number(verification.confirmations) 
+          : Number(verification.confirmations) || 0;
+        const blockNumberNum = typeof verification.blockNumber === 'bigint'
+          ? Number(verification.blockNumber)
+          : Number(verification.blockNumber) || 0;
+        
+        // ✅ Log verification result with safe types (avoid logging BigInt directly)
+        this.logger.log(`📊 Verification result:`, {
+          verified: verification.verified,
+          blockNumber: blockNumberNum,
+          confirmations: confirmationsNum,
+          from: verification.from,
+          to: verification.to,
+          amount: verification.amount,
+          recipientMatches: verification.recipientMatches,
+          amountMatches: verification.amountMatches,
+          message: verification.message,
+        });
         
         if (!verification.verified) {
           this.logger.error(`❌ Transaction verification failed: ${verification.message}`);
@@ -230,9 +249,9 @@ export class WalletService {
           throw new BadRequestException(`Transaction verification failed: ${verification.message}`);
         }
         
-        // Check confirmations (wait for at least 1 confirmation)
-        if (verification.confirmations < 1) {
-          this.logger.warn(`⚠️ Transaction has ${verification.confirmations} confirmations, waiting...`);
+        // Check confirmations (wait for at least 1 confirmation) - use converted number
+        if (confirmationsNum < 1) {
+          this.logger.warn(`⚠️ Transaction has ${confirmationsNum} confirmations, waiting...`);
           // In production, you might want to wait or use a job queue
         }
         
@@ -240,10 +259,10 @@ export class WalletService {
         this.logger.log(`   From: ${verification.from}`);
         this.logger.log(`   To: ${verification.to}`);
         this.logger.log(`   Amount: ${verification.amount} USDT`);
-        this.logger.log(`   Confirmations: ${verification.confirmations}`);
+        this.logger.log(`   Confirmations: ${confirmationsNum}`);
         
-        // ✅ Update transaction confirmations from verification
-        transaction.confirmations = Number(verification.confirmations) || 1;
+        // ✅ Update transaction confirmations from verification (use converted number)
+        transaction.confirmations = confirmationsNum || 1;
         await this.transactionsRepository.save(transaction);
       } else if (depositDto.network === 'TRC20' && this.tronService) {
         // TODO: Implement Tron verification
