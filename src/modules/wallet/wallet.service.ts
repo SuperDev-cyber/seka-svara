@@ -214,7 +214,10 @@ export class WalletService {
       txHash: depositDto.txHash,
       description: `Deposit ${depositAmount} USDT via ${depositDto.network}`,
       metadata: {
-        ...depositDto,
+        // ✅ Explicitly set each field to avoid BigInt from spread operator
+        network: depositDto.network,
+        fromAddress: depositDto.fromAddress,
+        txHash: depositDto.txHash,
         amount: depositAmount, // ✅ Ensure metadata also has number, not BigInt
         userDepositAddress,
         userBalanceBefore: typeof user.balance === 'bigint' 
