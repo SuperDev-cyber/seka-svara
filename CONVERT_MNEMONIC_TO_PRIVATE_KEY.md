@@ -160,3 +160,4 @@ BSC_PRIVATE_KEY=0xabcd...
 
 **Ready to deploy!** Once you have the private key in your `.env` file, you can proceed with deployment.
 
+
