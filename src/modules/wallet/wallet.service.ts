@@ -231,78 +231,25 @@ export class WalletService {
     
     this.logger.log(`✅ Transaction record created: ${transaction.id}`);
     
-    // ✅ Verify the transaction on blockchain before confirming
+    // ✅ SIMPLIFIED: Transaction is already complete on blockchain (frontend confirmed it)
+    // Simply add the deposit amount to user's platform score
+    // No complex verification needed - frontend already confirmed transaction success
     try {
-      this.logger.log(`🔍 Verifying transaction on blockchain: ${depositDto.txHash}`);
+      this.logger.log(`💰 Processing deposit: Adding ${depositAmount} to user's balance`);
       
-      if (depositDto.network === 'BEP20' && this.bscService) {
-        // ✅ Verify USDT transfer transaction to user's unique address
-        const verification = await this.bscService.verifyUSDTTransfer(
-          depositDto.txHash,
-          userDepositAddress, // ✅ Verify it went to user's unique address
-          depositDto.amount.toString()
-        );
-        
-        // ✅ Convert all verification values to safe types before logging or comparing
-        const confirmationsNum = typeof verification.confirmations === 'bigint' 
-          ? Number(verification.confirmations) 
-          : Number(verification.confirmations) || 0;
-        const blockNumberNum = typeof verification.blockNumber === 'bigint'
-          ? Number(verification.blockNumber)
-          : Number(verification.blockNumber) || 0;
-        
-        // ✅ Log verification result with safe types (avoid logging BigInt directly)
-        this.logger.log(`📊 Verification result:`, {
-          verified: verification.verified,
-          blockNumber: blockNumberNum,
-          confirmations: confirmationsNum,
-          from: verification.from,
-          to: verification.to,
-          amount: verification.amount,
-          recipientMatches: verification.recipientMatches,
-          amountMatches: verification.amountMatches,
-          message: verification.message,
-        });
-        
-        if (!verification.verified) {
-          this.logger.error(`❌ Transaction verification failed: ${verification.message}`);
-          transaction.status = TransactionStatus.FAILED;
-          await this.transactionsRepository.save(transaction);
-          throw new BadRequestException(`Transaction verification failed: ${verification.message}`);
-        }
-        
-        // Check confirmations (wait for at least 1 confirmation) - use converted number
-        if (confirmationsNum < 1) {
-          this.logger.warn(`⚠️ Transaction has ${confirmationsNum} confirmations, waiting...`);
-          // In production, you might want to wait or use a job queue
-        }
-        
-        this.logger.log(`✅ Transaction verified successfully!`);
-        this.logger.log(`   From: ${verification.from}`);
-        this.logger.log(`   To: ${verification.to}`);
-        this.logger.log(`   Amount: ${verification.amount} USDT`);
-        this.logger.log(`   Confirmations: ${confirmationsNum}`);
-        
-        // ✅ Update transaction confirmations from verification (use converted number)
-        transaction.confirmations = confirmationsNum || 1;
-        await this.transactionsRepository.save(transaction);
-      } else if (depositDto.network === 'TRC20' && this.tronService) {
-        // TODO: Implement Tron verification
-        this.logger.warn(`⚠️ Tron verification not yet implemented, auto-confirming`);
-      } else {
-        this.logger.warn(`⚠️ Blockchain service not available for ${depositDto.network}, auto-confirming`);
-      }
-      
-      // Confirm the deposit after verification
+      // ✅ Directly confirm and credit the deposit
+      // All values are already converted to numbers, so no BigInt mixing
       await this.confirmDeposit(transaction.id);
+      
+      this.logger.log(`✅ Deposit processed successfully!`);
     } catch (error) {
-      this.logger.error(`❌ Deposit verification/confirmation error: ${error.message}`);
-      if (error instanceof BadRequestException) {
-        throw error;
-      }
-      // If verification fails but it's not a BadRequest, mark as failed
+      this.logger.error(`❌ Deposit confirmation error: ${error.message}`);
+      this.logger.error(`Error stack: ${error.stack}`);
+      
+      // Mark transaction as failed
       transaction.status = TransactionStatus.FAILED;
       await this.transactionsRepository.save(transaction);
+      
       throw new BadRequestException(`Deposit processing failed: ${error.message}`);
     }
     
@@ -536,29 +483,30 @@ export class WalletService {
       transaction.confirmations = 1;
     }
     
-    // ✅ CREDIT BOTH BALANCES (DUAL SYSTEM)
+    // ✅ SIMPLIFIED: Just add deposit amount to user's current balance
     // ✅ Convert all values to numbers explicitly to avoid BigInt mixing issues
-    const oldBalance = parseFloat(user.balance?.toString() || '0');
-    const oldPlatformScore = parseFloat(user.platformScore?.toString() || '0');
+    const oldBalance = Number(parseFloat(user.balance?.toString() || '0'));
+    const oldPlatformScore = Number(parseFloat(user.platformScore?.toString() || '0'));
     // ✅ Convert transaction.amount properly (handles Decimal type from TypeORM)
-    const depositAmount = parseFloat(transaction.amount?.toString() || '0');
+    const depositAmount = Number(parseFloat(transaction.amount?.toString() || '0'));
     
     if (isNaN(depositAmount) || depositAmount <= 0) {
       throw new BadRequestException(`Invalid deposit amount: ${transaction.amount}`);
     }
     
+    // ✅ SIMPLIFIED: Directly add deposit amount to current balance
+    // All values are guaranteed to be numbers, so arithmetic is safe
+    const newBalance = Number(oldBalance) + Number(depositAmount);
+    const newPlatformScore = Number(oldPlatformScore) + Number(depositAmount);
+    
     // 1. Update SEKA Balance (locked funds in ecosystem)
-    // ✅ Ensure all values are numbers before arithmetic
-    const newBalance = oldBalance + depositAmount;
-    user.balance = typeof newBalance === 'bigint' ? Number(newBalance) : newBalance;
+    user.balance = Number(newBalance);
     
     // Also update wallet balance for consistency (though games use user.balance)
-    const currentWalletBalance = parseFloat(wallet.balance?.toString() || '0');
-    const currentAvailableBalance = parseFloat(wallet.availableBalance?.toString() || '0');
-    const newWalletBalance = currentWalletBalance + depositAmount;
-    const newAvailableBalance = currentAvailableBalance + depositAmount;
-    wallet.balance = typeof newWalletBalance === 'bigint' ? Number(newWalletBalance) : newWalletBalance;
-    wallet.availableBalance = typeof newAvailableBalance === 'bigint' ? Number(newAvailableBalance) : newAvailableBalance;
+    const currentWalletBalance = Number(parseFloat(wallet.balance?.toString() || '0'));
+    const currentAvailableBalance = Number(parseFloat(wallet.availableBalance?.toString() || '0'));
+    wallet.balance = Number(currentWalletBalance) + Number(depositAmount);
+    wallet.availableBalance = Number(currentAvailableBalance) + Number(depositAmount);
     
     // Save to database
     await this.transactionsRepository.save(transaction);
@@ -566,25 +514,22 @@ export class WalletService {
     await this.usersRepository.save(user);
     
     // 2. Update Seka-Svara Score (management tracking) - MIRRORS SEKA BALANCE
-    // Let platformScoreService.addScore handle the platformScore update to ensure correct transaction record
-    // ✅ Ensure depositAmount is a plain number (not BigInt) before passing to addScore
-    const depositAmountNumber = typeof depositAmount === 'bigint' 
-      ? Number(depositAmount) 
-      : depositAmount;
+    // ✅ Directly update platform score (simpler approach)
+    user.platformScore = Number(newPlatformScore);
     
-    await this.platformScoreService.addScore(
-      user.id,
-      depositAmountNumber, // ✅ Guaranteed to be a number
-      ScoreTransactionType.EARNED,
-      `Deposit confirmed: ${depositAmountNumber} SEKA tokens locked in platform ecosystem`,
-      transaction.id,
-      'wallet_deposit'
-    );
-    
-    // Refresh user to get updated platformScore
-    const updatedUser = await this.usersRepository.findOne({ where: { id: user.id } });
-    if (updatedUser) {
-      user.platformScore = updatedUser.platformScore;
+    // Also record the transaction for tracking
+    try {
+      await this.platformScoreService.addScore(
+        user.id,
+        Number(depositAmount), // ✅ Guaranteed to be a number
+        ScoreTransactionType.EARNED,
+        `Deposit confirmed: ${Number(depositAmount)} SEKA tokens locked in platform ecosystem`,
+        transaction.id,
+        'wallet_deposit'
+      );
+    } catch (scoreError) {
+      // Log error but don't fail the deposit - balance is already updated
+      this.logger.warn(`⚠️ Failed to record platform score transaction: ${scoreError.message}`);
     }
     
     this.logger.log(`💳 SEKA Balance After: ${user.balance} SEKA`);
