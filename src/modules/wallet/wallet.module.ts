@@ -9,6 +9,7 @@ import { PlatformScoreTransaction } from '../users/entities/platform-score-trans
 import { AddressGeneratorService } from './services/address-generator.service';
 import { BlockchainModule } from '../blockchain/blockchain.module';
 import { PlatformScoreService } from '../users/services/platform-score.service';
+import { DepositWatcherService } from './services/deposit-watcher.service';
 
 @Module({
   imports: [
@@ -16,7 +17,7 @@ import { PlatformScoreService } from '../users/services/platform-score.service';
     BlockchainModule, // Keep import but make BlockchainService optional in WalletService
   ],
   controllers: [WalletController],
-  providers: [WalletService, AddressGeneratorService, PlatformScoreService],
+  providers: [WalletService, AddressGeneratorService, PlatformScoreService, DepositWatcherService],
   exports: [WalletService, AddressGeneratorService],
 })
 export class WalletModule {}

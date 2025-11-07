@@ -109,5 +109,11 @@ export class AdminController {
     const parsedLimit = parseInt(String(limit)) || 50;
     return this.adminService.getGameTables(parsedPage, parsedLimit, status);
   }
+
+  @Get('total-locked-funds')
+  @ApiOperation({ summary: 'Get total MAINNET funds locked in platform ecosystem' })
+  async getTotalLockedFunds() {
+    return this.adminService.getTotalLockedFunds();
+  }
 }
 

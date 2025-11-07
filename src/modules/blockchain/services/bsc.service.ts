@@ -10,6 +10,8 @@ export class BscService {
   private provider: ethers.JsonRpcProvider;
   private wallet: ethers.Wallet;
   private USDTContract: ethers.Contract;
+  private usdtDecimals = 18;
+  private initialized = false;
   private logger = new Logger('BscService');
 
   constructor(private configService: ConfigService) {
@@ -43,6 +45,13 @@ export class BscService {
       ];
 
       this.USDTContract = new ethers.Contract(USDTAddress, USDTAbi, this.wallet);
+      try {
+        this.usdtDecimals = await this.USDTContract.decimals();
+      } catch (decimalsError) {
+        this.logger.warn(`Could not fetch USDT decimals on init, using default 18: ${decimalsError.message}`);
+        this.usdtDecimals = 18;
+      }
+      this.initialized = true;
       this.logger.log('BSC service initialized successfully');
     } catch (error) {
       this.logger.error(`Failed to initialize BSC service: ${error.message}`);
@@ -56,12 +65,7 @@ export class BscService {
         throw new Error('BSC service not initialized');
       }
       const balance = await this.USDTContract.balanceOf(address);
-      let decimals = 18; // BSC USDT typically uses 18 decimals
-      try {
-        decimals = await this.USDTContract.decimals();
-      } catch (error) {
-        this.logger.warn(`Could not get decimals, using default 18: ${error.message}`);
-      }
+      const decimals = await this.getUSDTDecimals();
       return ethers.formatUnits(balance, decimals);
     } catch (error) {
       this.logger.error(`Failed to get BSC balance: ${error.message}`);
@@ -77,13 +81,7 @@ export class BscService {
 
       // USDT on BSC typically uses 18 decimals
       // Try to get decimals from contract, fallback to 18 if it fails
-      let decimals = 18;
-      try {
-        decimals = await this.USDTContract.decimals();
-      } catch (error) {
-        this.logger.warn(`Could not get decimals from contract, using default 18: ${error.message}`);
-        decimals = 18; // BSC USDT typically uses 18 decimals
-      }
+      const decimals = await this.getUSDTDecimals();
 
       const amountInWei = ethers.parseUnits(amount, decimals);
 
@@ -173,12 +171,7 @@ export class BscService {
       const amount = BigInt(amountHex);
 
       // Get decimals
-      let decimals = 18;
-      try {
-        decimals = await this.USDTContract.decimals();
-      } catch (error) {
-        this.logger.warn(`Could not get decimals, using default 18: ${error.message}`);
-      }
+      const decimals = await this.getUSDTDecimals();
 
       const amountFormatted = ethers.formatUnits(amount, decimals);
 
@@ -235,7 +228,7 @@ export class BscService {
 
   async estimateGas(to: string, amount: string): Promise<string> {
     try {
-      const decimals = await this.USDTContract.decimals();
+      const decimals = await this.getUSDTDecimals();
       const amountInWei = ethers.parseUnits(amount, decimals);
       const gasEstimate = await this.USDTContract.transfer.estimateGas(to, amountInWei);
       return gasEstimate.toString();
@@ -243,6 +236,100 @@ export class BscService {
       this.logger.error(`Failed to estimate gas: ${error.message}`);
       throw error;
     }
+  }
+
+  isInitialized(): boolean {
+    return this.initialized && !!this.provider && !!this.USDTContract;
+  }
+
+  getProvider(): ethers.JsonRpcProvider | null {
+    return this.provider || null;
+  }
+
+  async getUSDTDecimals(): Promise<number> {
+    if (!this.USDTContract) {
+      throw new Error('BSC service not initialized');
+    }
+    if (!this.usdtDecimals) {
+      try {
+        this.usdtDecimals = await this.USDTContract.decimals();
+      } catch (error) {
+        this.logger.warn(`Could not fetch USDT decimals, defaulting to 18: ${error.message}`);
+        this.usdtDecimals = 18;
+      }
+    }
+    return this.usdtDecimals;
+  }
+
+  async getUSDTTransferEventsTo(
+    toAddresses: string[],
+    fromBlock: number,
+    toBlock: number,
+  ): Promise<{
+    txHash: string;
+    from: string;
+    to: string;
+    amountRaw: bigint;
+    amount: number;
+    blockNumber: number;
+    logIndex: number;
+  }[]> {
+    if (!this.provider || !this.USDTContract) {
+      throw new Error('BSC service not initialized');
+    }
+
+    if (!toAddresses || toAddresses.length === 0) {
+      return [];
+    }
+
+    const normalizedAddresses = toAddresses
+      .filter(Boolean)
+      .map((addr) => ethers.getAddress(addr).toLowerCase());
+
+    if (normalizedAddresses.length === 0) {
+      return [];
+    }
+
+    const iface = new ethers.Interface([
+      'event Transfer(address indexed from, address indexed to, uint256 value)',
+    ]);
+    const topic = iface.getEventTopic('Transfer');
+    const addressTopicValues = normalizedAddresses.map((addr) =>
+      ethers.zeroPadValue(addr, 32),
+    );
+
+    const usdtAddress = typeof this.USDTContract.target === 'string'
+      ? this.USDTContract.target
+      : await this.USDTContract.target.getAddress();
+
+    const logs = await this.provider.getLogs({
+      address: usdtAddress,
+      fromBlock,
+      toBlock,
+      topics: [topic, null, addressTopicValues],
+    });
+
+    if (!logs || logs.length === 0) {
+      return [];
+    }
+
+    const decimals = await this.getUSDTDecimals();
+
+    return logs.map((log) => {
+      const parsed = iface.parseLog(log);
+      const rawAmount = parsed.args.value as bigint;
+      const formattedAmount = Number(ethers.formatUnits(rawAmount, decimals));
+
+      return {
+        txHash: log.transactionHash,
+        from: ethers.getAddress(parsed.args.from),
+        to: ethers.getAddress(parsed.args.to),
+        amountRaw: rawAmount,
+        amount: formattedAmount,
+        blockNumber: Number(log.blockNumber),
+        logIndex: log.logIndex,
+      };
+    });
   }
 }
 

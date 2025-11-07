@@ -278,6 +278,66 @@ export class AdminService {
     return this.platformScoreService.getScoreStatistics();
   }
 
+  /**
+   * Get total MAINNET funds locked in the platform ecosystem
+   * This represents the sum of all user balances (platform scores) across the platform
+   */
+  async getTotalLockedFunds() {
+    try {
+      // Get total platform score (sum of all user platform scores)
+      // This represents the total USDT locked in the platform ecosystem
+      const totalPlatformScoreResult = await this.usersRepository
+        .createQueryBuilder('user')
+        .select('SUM(user.platformScore)', 'total')
+        .getRawOne();
+
+      const totalPlatformScore = parseFloat(totalPlatformScoreResult?.total || '0');
+
+      // Also get total user balance (sum of all user.balance)
+      const totalUserBalanceResult = await this.usersRepository
+        .createQueryBuilder('user')
+        .select('SUM(user.balance)', 'total')
+        .getRawOne();
+
+      const totalUserBalance = parseFloat(totalUserBalanceResult?.total || '0');
+
+      // Get total deposits and withdrawals for reference
+      const depositsResult = await this.usersRepository.query(`
+        SELECT SUM(amount) as total 
+        FROM wallet_transactions 
+        WHERE type = 'deposit' AND status = 'confirmed'
+      `);
+      const totalDeposits = parseFloat(depositsResult[0]?.total || '0');
+
+      const withdrawalsResult = await this.usersRepository.query(`
+        SELECT SUM(amount) as total 
+        FROM wallet_transactions 
+        WHERE type = 'withdrawal' AND status = 'confirmed'
+      `);
+      const totalWithdrawals = parseFloat(withdrawalsResult[0]?.total || '0');
+
+      // Get active user count
+      const activeUsers = await this.usersRepository.count({
+        where: { status: UserStatus.ACTIVE }
+      });
+
+      return {
+        totalLockedFunds: totalPlatformScore, // Total USDT locked in platform (Platform Score)
+        totalUserBalance: totalUserBalance, // Total SEKA balance
+        totalDeposits: totalDeposits,
+        totalWithdrawals: totalWithdrawals,
+        netLockedFunds: totalDeposits - totalWithdrawals, // Net funds in platform
+        activeUsers: activeUsers,
+        currency: 'USDT',
+        network: 'MAINNET (BEP20/TRC20)',
+        lastUpdated: new Date().toISOString(),
+      };
+    } catch (error) {
+      this.logger.error('Error fetching total locked funds:', error);
+      throw error;
+    }
+  }
+
   async updateScoreTransaction(id: string, updateData: { amount?: number; type?: string; description?: string }) {
     return this.platformScoreService.updateScoreTransaction(id, updateData);
   }

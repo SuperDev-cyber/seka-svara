@@ -239,7 +239,7 @@ export class WalletService {
       
       // ✅ Directly confirm and credit the deposit
       // All values are already converted to numbers, so no BigInt mixing
-      await this.confirmDeposit(transaction.id);
+    await this.confirmDeposit(transaction.id);
       
       this.logger.log(`✅ Deposit processed successfully!`);
     } catch (error) {
@@ -519,14 +519,14 @@ export class WalletService {
     
     // Also record the transaction for tracking (optional - don't fail if this errors)
     try {
-      await this.platformScoreService.addScore(
-        user.id,
+    await this.platformScoreService.addScore(
+      user.id,
         Number(depositAmount), // ✅ Guaranteed to be a number
-        ScoreTransactionType.EARNED,
+      ScoreTransactionType.EARNED,
         `Deposit confirmed: ${Number(depositAmount)} SEKA tokens locked in platform ecosystem`,
-        transaction.id,
-        'wallet_deposit'
-      );
+      transaction.id,
+      'wallet_deposit'
+    );
     } catch (scoreError) {
       // Log error but don't fail the deposit - balance is already updated
       this.logger.warn(`⚠️ Failed to record platform score transaction: ${scoreError.message}`);
