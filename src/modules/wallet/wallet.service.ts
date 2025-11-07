@@ -180,20 +180,28 @@ export class WalletService {
     this.logger.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
     
     // Create transaction record
+    // ✅ Ensure amount is a number (not BigInt) to avoid type mixing issues
+    const depositAmount = typeof depositDto.amount === 'bigint' 
+      ? Number(depositDto.amount) 
+      : parseFloat(depositDto.amount.toString());
+    
     const transaction = this.transactionsRepository.create({
       walletId: wallet.id,
       type: TransactionType.DEPOSIT,
       status: TransactionStatus.PENDING,
       network: depositDto.network as NetworkType,
-      amount: depositDto.amount,
+      amount: depositAmount, // ✅ Guaranteed to be a number
       fromAddress: depositDto.fromAddress,
       toAddress: adminAddress, // ✅ Now using admin wallet address
       txHash: depositDto.txHash,
-      description: `Deposit ${depositDto.amount} USDT via ${depositDto.network}`,
+      description: `Deposit ${depositAmount} USDT via ${depositDto.network}`,
       metadata: {
         ...depositDto,
+        amount: depositAmount, // ✅ Ensure metadata also has number, not BigInt
         adminAddress,
-        userBalanceBefore: user.balance,
+        userBalanceBefore: typeof user.balance === 'bigint' 
+          ? Number(user.balance) 
+          : parseFloat(user.balance?.toString() || '0'),
       },
     });
     
@@ -512,11 +520,16 @@ export class WalletService {
     
     // 2. Update Seka-Svara Score (management tracking) - MIRRORS SEKA BALANCE
     // Let platformScoreService.addScore handle the platformScore update to ensure correct transaction record
+    // ✅ Ensure depositAmount is a plain number (not BigInt) before passing to addScore
+    const depositAmountNumber = typeof depositAmount === 'bigint' 
+      ? Number(depositAmount) 
+      : depositAmount;
+    
     await this.platformScoreService.addScore(
       user.id,
-      depositAmount,
+      depositAmountNumber, // ✅ Guaranteed to be a number
       ScoreTransactionType.EARNED,
-      `Deposit confirmed: ${depositAmount} SEKA tokens locked in platform ecosystem`,
+      `Deposit confirmed: ${depositAmountNumber} SEKA tokens locked in platform ecosystem`,
       transaction.id,
       'wallet_deposit'
     );

@@ -200,10 +200,15 @@ export class BscService {
       // ✅ Get confirmations and convert to number to avoid BigInt mixing issues
       const confirmationsBigInt = await receipt.confirmations();
       const confirmations = Number(confirmationsBigInt);
+      
+      // ✅ Convert blockNumber to number to avoid BigInt mixing issues
+      const blockNumber = typeof receipt.blockNumber === 'bigint' 
+        ? Number(receipt.blockNumber) 
+        : receipt.blockNumber;
 
       return {
         verified: receipt.status === 1 && recipientMatches && amountMatches,
-        blockNumber: receipt.blockNumber,
+        blockNumber: blockNumber, // ✅ Now a number, not BigInt
         confirmations: confirmations, // ✅ Now a number, not BigInt
         from: fromAddress,
         to: toAddress,
