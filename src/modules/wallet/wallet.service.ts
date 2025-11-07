@@ -84,8 +84,9 @@ export class WalletService {
       throw new NotFoundException('User not found');
     }
 
-    const oldBalance = Number(user.balance);
-    const oldPlatformScore = Number(user.platformScore);
+    // ✅ Convert all values to numbers explicitly to avoid BigInt mixing issues
+    const oldBalance = parseFloat(user.balance?.toString() || '0');
+    const oldPlatformScore = parseFloat(user.platformScore?.toString() || '0');
     const balanceDifference = contractBalance - oldBalance;
 
     this.logger.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
@@ -587,8 +588,8 @@ export class WalletService {
         id: user.id,
         email: user.email,
         balanceBefore: oldBalance,
-        balanceAfter: user.balance,
-        credited: transaction.amount,
+        balanceAfter: parseFloat(user.balance?.toString() || '0'),
+        credited: depositAmount, // ✅ Use converted depositAmount, not transaction.amount
       },
     };
   }
@@ -617,8 +618,12 @@ export class WalletService {
     
     // Update wallet balance
     const wallet = transaction.wallet;
-    wallet.balance -= transaction.amount;
-    wallet.lockedBalance -= transaction.amount;
+    // ✅ Convert transaction.amount to number to avoid BigInt mixing
+    const withdrawalAmount = parseFloat(transaction.amount?.toString() || '0');
+    const currentWalletBalance = parseFloat(wallet.balance?.toString() || '0');
+    const currentLockedBalance = parseFloat(wallet.lockedBalance?.toString() || '0');
+    wallet.balance = currentWalletBalance - withdrawalAmount;
+    wallet.lockedBalance = currentLockedBalance - withdrawalAmount;
     
     await this.transactionsRepository.save(transaction);
     await this.walletsRepository.save(wallet);
