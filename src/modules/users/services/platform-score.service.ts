@@ -32,9 +32,14 @@ export class PlatformScoreService {
       throw new NotFoundException('User not found');
     }
 
-    // Ensure numeric math (avoid string concatenation like "2019" + 1 = "20191")
-    const numericAmount = Number(amount) || 0;
-    const balanceBefore = Number(user.platformScore) || 0;
+    // ✅ Ensure numeric math (avoid string concatenation like "2019" + 1 = "20191")
+    // ✅ Convert all values to numbers explicitly to avoid BigInt mixing issues
+    const numericAmount = typeof amount === 'bigint' 
+      ? Number(amount) 
+      : parseFloat(amount?.toString() || '0');
+    const balanceBefore = typeof user.platformScore === 'bigint'
+      ? Number(user.platformScore)
+      : parseFloat(user.platformScore?.toString() || '0');
     const balanceAfter = balanceBefore + numericAmount;
 
     // Update user's Seka-Svara Score
