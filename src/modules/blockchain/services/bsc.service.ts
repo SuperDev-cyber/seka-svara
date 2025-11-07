@@ -190,24 +190,24 @@ export class BscService {
       // Verify amount if provided
       let amountMatches = true;
       if (expectedAmount) {
-        // ✅ ethers.parseUnits returns a BigInt, ensure all operations use BigInt
         const expectedAmountBig = ethers.parseUnits(expectedAmount, decimals);
-        // ✅ Calculate tolerance as BigInt to avoid mixing types
-        // For 18 decimals: 10^(18-6) = 10^12 = 1000000000000
-        const tolerancePower = decimals - 6;
-        const tolerance = BigInt(10) ** BigInt(tolerancePower);
-        
-        // ✅ All values are now BigInt, safe to compare
+        // ✅ Convert tolerance calculation to BigInt properly
+        const toleranceValue = 10 ** (decimals - 6);
+        const tolerance = BigInt(toleranceValue); // Allow small tolerance for rounding
         amountMatches = (amount >= expectedAmountBig - tolerance) && (amount <= expectedAmountBig + tolerance);
       }
+
+      // ✅ Get confirmations and convert to number to avoid BigInt mixing issues
+      const confirmationsBigInt = await receipt.confirmations();
+      const confirmations = Number(confirmationsBigInt);
 
       return {
         verified: receipt.status === 1 && recipientMatches && amountMatches,
         blockNumber: receipt.blockNumber,
-        confirmations: await receipt.confirmations(),
+        confirmations: confirmations, // ✅ Now a number, not BigInt
         from: fromAddress,
         to: toAddress,
-        amount: amountFormatted,
+        amount: amountFormatted, // ✅ Already a string from formatUnits
         recipientMatches,
         amountMatches,
         message: recipientMatches && amountMatches 

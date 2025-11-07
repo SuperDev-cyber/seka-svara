@@ -233,6 +233,10 @@ export class WalletService {
         this.logger.log(`   To: ${verification.to}`);
         this.logger.log(`   Amount: ${verification.amount} USDT`);
         this.logger.log(`   Confirmations: ${verification.confirmations}`);
+        
+        // ✅ Update transaction confirmations from verification
+        transaction.confirmations = Number(verification.confirmations) || 1;
+        await this.transactionsRepository.save(transaction);
       } else if (depositDto.network === 'TRC20' && this.tronService) {
         // TODO: Implement Tron verification
         this.logger.warn(`⚠️ Tron verification not yet implemented, auto-confirming`);
@@ -479,16 +483,24 @@ export class WalletService {
     transaction.confirmations = 1; // In real implementation, get from blockchain
     
     // ✅ CREDIT BOTH BALANCES (DUAL SYSTEM)
-    const oldBalance = Number(user.balance);
-    const oldPlatformScore = Number(user.platformScore);
-    const depositAmount = Number(transaction.amount);
+    // ✅ Convert all values to numbers explicitly to avoid BigInt mixing issues
+    const oldBalance = parseFloat(user.balance?.toString() || '0');
+    const oldPlatformScore = parseFloat(user.platformScore?.toString() || '0');
+    // ✅ Convert transaction.amount properly (handles Decimal type from TypeORM)
+    const depositAmount = parseFloat(transaction.amount?.toString() || '0');
+    
+    if (isNaN(depositAmount) || depositAmount <= 0) {
+      throw new BadRequestException(`Invalid deposit amount: ${transaction.amount}`);
+    }
     
     // 1. Update SEKA Balance (locked funds in ecosystem)
     user.balance = oldBalance + depositAmount;
     
     // Also update wallet balance for consistency (though games use user.balance)
-    wallet.balance = Number(wallet.balance) + depositAmount;
-    wallet.availableBalance = Number(wallet.availableBalance) + depositAmount;
+    const currentWalletBalance = parseFloat(wallet.balance?.toString() || '0');
+    const currentAvailableBalance = parseFloat(wallet.availableBalance?.toString() || '0');
+    wallet.balance = currentWalletBalance + depositAmount;
+    wallet.availableBalance = currentAvailableBalance + depositAmount;
     
     // Save to database
     await this.transactionsRepository.save(transaction);
