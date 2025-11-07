@@ -547,13 +547,17 @@ export class WalletService {
     }
     
     // 1. Update SEKA Balance (locked funds in ecosystem)
-    user.balance = oldBalance + depositAmount;
+    // ✅ Ensure all values are numbers before arithmetic
+    const newBalance = oldBalance + depositAmount;
+    user.balance = typeof newBalance === 'bigint' ? Number(newBalance) : newBalance;
     
     // Also update wallet balance for consistency (though games use user.balance)
     const currentWalletBalance = parseFloat(wallet.balance?.toString() || '0');
     const currentAvailableBalance = parseFloat(wallet.availableBalance?.toString() || '0');
-    wallet.balance = currentWalletBalance + depositAmount;
-    wallet.availableBalance = currentAvailableBalance + depositAmount;
+    const newWalletBalance = currentWalletBalance + depositAmount;
+    const newAvailableBalance = currentAvailableBalance + depositAmount;
+    wallet.balance = typeof newWalletBalance === 'bigint' ? Number(newWalletBalance) : newWalletBalance;
+    wallet.availableBalance = typeof newAvailableBalance === 'bigint' ? Number(newAvailableBalance) : newAvailableBalance;
     
     // Save to database
     await this.transactionsRepository.save(transaction);

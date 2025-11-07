@@ -191,10 +191,18 @@ export class BscService {
       let amountMatches = true;
       if (expectedAmount) {
         const expectedAmountBig = ethers.parseUnits(expectedAmount, decimals);
+        // ✅ Convert both to BigInt for comparison to avoid mixing types
+        const expectedAmountBigInt = typeof expectedAmountBig === 'bigint' 
+          ? expectedAmountBig 
+          : BigInt(expectedAmountBig.toString());
+        const amountBigInt = typeof amount === 'bigint' ? amount : BigInt(amount.toString());
+        
         // ✅ Convert tolerance calculation to BigInt properly
         const toleranceValue = 10 ** (decimals - 6);
-        const tolerance = BigInt(toleranceValue); // Allow small tolerance for rounding
-        amountMatches = (amount >= expectedAmountBig - tolerance) && (amount <= expectedAmountBig + tolerance);
+        const tolerance = BigInt(Math.floor(toleranceValue)); // Allow small tolerance for rounding
+        
+        // ✅ All BigInt comparisons - no mixing
+        amountMatches = (amountBigInt >= expectedAmountBigInt - tolerance) && (amountBigInt <= expectedAmountBigInt + tolerance);
       }
 
       // ✅ Get confirmations and convert to number to avoid BigInt mixing issues

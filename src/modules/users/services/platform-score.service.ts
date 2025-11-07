@@ -40,11 +40,14 @@ export class PlatformScoreService {
     const balanceBefore = typeof user.platformScore === 'bigint'
       ? Number(user.platformScore)
       : parseFloat(user.platformScore?.toString() || '0');
-    const balanceAfter = balanceBefore + numericAmount;
+    
+    // ✅ Ensure arithmetic result is a number, not BigInt
+    const balanceAfterNum = balanceBefore + numericAmount;
+    const balanceAfter = typeof balanceAfterNum === 'bigint' ? Number(balanceAfterNum) : balanceAfterNum;
 
-    // Update user's Seka-Svara Score
+    // Update user's Seka-Svara Score - ensure it's a number
     await this.usersRepository.update(userId, {
-      platformScore: balanceAfter,
+      platformScore: Number(balanceAfter),
     });
 
     // Create transaction record
