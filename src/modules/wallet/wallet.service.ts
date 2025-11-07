@@ -518,9 +518,11 @@ export class WalletService {
     this.logger.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
     this.logger.log(`📄 Transaction ID: ${transaction.id}`);
     this.logger.log(`👤 User: ${user.email} (${user.id})`);
-    this.logger.log(`💰 Amount: ${transaction.amount} SEKA`);
-    this.logger.log(`💳 SEKA Balance Before: ${user.balance}`);
-    this.logger.log(`🏆 Seka-Svara Score Before: ${user.platformScore}`);
+    // ✅ Convert transaction.amount to string for logging to avoid BigInt issues
+    const transactionAmountStr = transaction.amount?.toString() || '0';
+    this.logger.log(`💰 Amount: ${transactionAmountStr} SEKA`);
+    this.logger.log(`💳 SEKA Balance Before: ${user.balance?.toString() || '0'}`);
+    this.logger.log(`🏆 Seka-Svara Score Before: ${user.platformScore?.toString() || '0'}`);
     
     // Update transaction status
     transaction.status = TransactionStatus.CONFIRMED;
