@@ -194,8 +194,8 @@ export class BscService {
         // ✅ Convert both to BigInt for comparison to avoid mixing types
         const expectedAmountBigInt = typeof expectedAmountBig === 'bigint' 
           ? expectedAmountBig 
-          : BigInt(expectedAmountBig.toString());
-        const amountBigInt = typeof amount === 'bigint' ? amount : BigInt(amount.toString());
+          : BigInt(String(expectedAmountBig));
+        const amountBigInt = typeof amount === 'bigint' ? amount : BigInt(String(amount));
         
         // ✅ Convert tolerance calculation to BigInt properly
         const toleranceValue = 10 ** (decimals - 6);
