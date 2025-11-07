@@ -660,10 +660,11 @@ export class WalletService {
     const totalDeposits = deposits.reduce((sum, t) => sum + parseFloat(t.amount.toString()), 0);
     const totalWithdrawals = withdrawals.reduce((sum, t) => sum + parseFloat(t.amount.toString()), 0);
     
+    // ✅ Convert all wallet balance values to numbers to avoid BigInt/Decimal serialization issues
     return {
-      totalBalance: wallet.balance,
-      availableBalance: wallet.availableBalance,
-      lockedBalance: wallet.lockedBalance,
+      totalBalance: parseFloat(wallet.balance?.toString() || '0'),
+      availableBalance: parseFloat(wallet.availableBalance?.toString() || '0'),
+      lockedBalance: parseFloat(wallet.lockedBalance?.toString() || '0'),
       totalDeposits,
       totalWithdrawals,
       transactionCount: transactions.length,
