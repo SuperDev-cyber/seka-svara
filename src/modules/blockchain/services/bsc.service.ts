@@ -190,8 +190,14 @@ export class BscService {
       // Verify amount if provided
       let amountMatches = true;
       if (expectedAmount) {
+        // ✅ ethers.parseUnits returns a BigInt, ensure all operations use BigInt
         const expectedAmountBig = ethers.parseUnits(expectedAmount, decimals);
-        const tolerance = BigInt(10 ** (decimals - 6)); // Allow small tolerance for rounding
+        // ✅ Calculate tolerance as BigInt to avoid mixing types
+        // For 18 decimals: 10^(18-6) = 10^12 = 1000000000000
+        const tolerancePower = decimals - 6;
+        const tolerance = BigInt(10) ** BigInt(tolerancePower);
+        
+        // ✅ All values are now BigInt, safe to compare
         amountMatches = (amount >= expectedAmountBig - tolerance) && (amount <= expectedAmountBig + tolerance);
       }
 
