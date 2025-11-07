@@ -480,7 +480,10 @@ export class WalletService {
     // Update transaction status
     transaction.status = TransactionStatus.CONFIRMED;
     transaction.confirmedAt = new Date();
-    transaction.confirmations = 1; // In real implementation, get from blockchain
+    // ✅ Confirmations should already be set from verification, but ensure it's a number
+    if (!transaction.confirmations || typeof transaction.confirmations !== 'number') {
+      transaction.confirmations = 1;
+    }
     
     // ✅ CREDIT BOTH BALANCES (DUAL SYSTEM)
     // ✅ Convert all values to numbers explicitly to avoid BigInt mixing issues
