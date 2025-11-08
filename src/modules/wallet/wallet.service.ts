@@ -275,10 +275,15 @@ export class WalletService {
       throw new BadRequestException('Invalid withdrawal address');
     }
     
-    // Use fromAddress from DTO if provided (user's Web3Auth account), otherwise use admin wallet
-    const fromAddress = withdrawDto.fromAddress || getAdminWalletAddress(withdrawDto.network as 'BEP20' | 'TRC20');
+    // Validate fromAddress (user's Web3Auth account address)
+    if (!withdrawDto.fromAddress || withdrawDto.fromAddress.length < 20) {
+      throw new BadRequestException('Invalid from address. Must provide your Web3Auth account address.');
+    }
     
-    this.logger.log(`💰 Processing withdrawal: ${withdrawDto.amount} USDT from ${fromAddress} to ${withdrawDto.toAddress} on ${withdrawDto.network}`);
+    // Use fromAddress from DTO (user's Web3Auth account address)
+    const fromAddress = withdrawDto.fromAddress;
+    
+    this.logger.log(`💰 Processing withdrawal: ${withdrawDto.amount} USDT from ${fromAddress} (user's Web3Auth account) to ${withdrawDto.toAddress} on ${withdrawDto.network}`);
     
     // Create transaction record
     const transaction = this.transactionsRepository.create({
@@ -287,7 +292,7 @@ export class WalletService {
       status: TransactionStatus.PENDING,
       network: withdrawDto.network as NetworkType,
       amount: withdrawDto.amount,
-      fromAddress: fromAddress, // From user's Web3Auth account (if provided) or admin wallet
+      fromAddress: fromAddress, // From user's Web3Auth account address
       toAddress: withdrawDto.toAddress, // To user's chosen withdrawal address
       description: `Withdrawal to ${withdrawDto.toAddress}`,
       metadata: withdrawDto,

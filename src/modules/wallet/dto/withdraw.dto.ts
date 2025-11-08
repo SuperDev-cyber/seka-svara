@@ -15,8 +15,7 @@ export class WithdrawDto {
   @IsString()
   toAddress: string;
 
-  @ApiProperty({ description: 'From address (user\'s Web3Auth account address). If not provided, uses admin wallet.', required: false })
-  @IsOptional()
+  @ApiProperty({ description: 'From address (user\'s Web3Auth account address). Required - must be the user\'s SafeAuth account address.' })
   @IsString()
-  fromAddress?: string;
+  fromAddress: string;
 }
