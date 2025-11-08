@@ -283,7 +283,16 @@ export class WalletService {
     // Use fromAddress from DTO (user's Web3Auth account address)
     const fromAddress = withdrawDto.fromAddress;
     
-    this.logger.log(`💰 Processing withdrawal: ${withdrawDto.amount} USDT from ${fromAddress} (user's Web3Auth account) to ${withdrawDto.toAddress} on ${withdrawDto.network}`);
+    // ✅ Enhanced withdrawal logging - Display amount prominently
+    this.logger.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+    this.logger.log(`💸 WITHDRAWAL REQUEST RECEIVED`);
+    this.logger.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+    this.logger.log(`👤 User ID: ${userId}`);
+    this.logger.log(`💰 WITHDRAWAL AMOUNT: ${withdrawDto.amount} USDT`);
+    this.logger.log(`🌐 Network: ${withdrawDto.network}`);
+    this.logger.log(`📤 From Address (Web3Auth): ${fromAddress}`);
+    this.logger.log(`📥 To Address: ${withdrawDto.toAddress}`);
+    this.logger.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
     
     // Create transaction record
     const transaction = this.transactionsRepository.create({

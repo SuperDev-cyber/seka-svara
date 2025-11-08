@@ -16,7 +16,7 @@ import { WalletService } from '../wallet.service';
 export class DepositWatcherService {
   private readonly logger = new Logger(DepositWatcherService.name);
   private lastProcessedBscBlock = 0;
-  private readonly blockLookback = 250; // Cover ~8-10 mins on BSC
+  private readonly blockLookback = 100; // Reduced from 250 to 100 (~3-4 mins) to reduce rate limit errors
 
   constructor(
     @InjectRepository(Wallet)
@@ -30,8 +30,11 @@ export class DepositWatcherService {
   /**
    * Periodically scan BSC for USDT transfers to known deposit addresses.
    * Disabled automatically if the BSC service is not configured.
+   * 
+   * Changed from EVERY_MINUTE to every 2 minutes to reduce rate limit errors.
+   * Cron expression: every 2 minutes at second 0
    */
-  @Cron(CronExpression.EVERY_MINUTE)
+  @Cron('0 */2 * * * *')
   async pollBscDeposits() {
     if (!this.bscService?.isInitialized()) {
       return;
@@ -49,6 +52,11 @@ export class DepositWatcherService {
       }
 
       const fromBlock = this.calculateFromBlock(currentBlock);
+      
+      // Reduce block range to avoid rate limits - only check last 100 blocks (~3-4 minutes)
+      const maxBlockRange = 100;
+      const adjustedFromBlock = Math.max(fromBlock, currentBlock - maxBlockRange);
+      
       this.lastProcessedBscBlock = currentBlock;
 
       const wallets = await this.walletsRepository
@@ -72,13 +80,42 @@ export class DepositWatcherService {
         return;
       }
 
-      const transferEvents = await this.bscService.getUSDTTransferEventsTo(
-        monitoredAddresses,
-        fromBlock,
-        currentBlock,
-      );
+      // Retry logic with exponential backoff for rate limit errors
+      let transferEvents;
+      let retries = 0;
+      const maxRetries = 3;
+      const baseDelay = 5000; // 5 seconds
 
-      if (!transferEvents.length) {
+      while (retries <= maxRetries) {
+        try {
+          transferEvents = await this.bscService.getUSDTTransferEventsTo(
+            monitoredAddresses,
+            adjustedFromBlock,
+            currentBlock,
+          );
+          break; // Success, exit retry loop
+        } catch (error) {
+          const errorMessage = error.message || JSON.stringify(error);
+          const isRateLimit = errorMessage.includes('rate limit') || 
+                             errorMessage.includes('rate_limit') ||
+                             (error.code && error.code === -32005);
+
+          if (isRateLimit && retries < maxRetries) {
+            retries++;
+            const delay = baseDelay * Math.pow(2, retries - 1); // Exponential backoff
+            this.logger.warn(
+              `Rate limit hit on eth_getLogs. Retrying in ${delay / 1000}s (attempt ${retries}/${maxRetries})...`
+            );
+            await new Promise(resolve => setTimeout(resolve, delay));
+            continue;
+          } else {
+            // Not a rate limit error, or max retries reached
+            throw error;
+          }
+        }
+      }
+
+      if (!transferEvents || transferEvents.length === 0) {
         return;
       }
 
@@ -86,7 +123,18 @@ export class DepositWatcherService {
         await this.processBscDepositEvent(event, addressMap);
       }
     } catch (error) {
-      this.logger.error(`BSC deposit watcher error: ${error.message}`);
+      const errorMessage = error.message || JSON.stringify(error);
+      const isRateLimit = errorMessage.includes('rate limit') || 
+                         errorMessage.includes('rate_limit') ||
+                         (error.code && error.code === -32005);
+      
+      if (isRateLimit) {
+        this.logger.warn(
+          `BSC deposit watcher rate limit error (will retry on next cycle): ${errorMessage.substring(0, 200)}`
+        );
+      } else {
+        this.logger.error(`BSC deposit watcher error: ${errorMessage}`);
+      }
     }
   }
 
