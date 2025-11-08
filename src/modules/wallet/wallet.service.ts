@@ -347,13 +347,33 @@ export class WalletService {
       transaction.txHash = txHash;
       await this.transactionsRepository.save(transaction);
       
+      // Get platform score before withdrawal
+      const platformScoreBefore = Number(parseFloat(user.platformScore?.toString() || '0'));
+      
       // Deduct from user's platform score
       await this.platformScoreService.deductScore(
         userId,
         withdrawDto.amount,
-        ScoreTransactionType.SPENT,
-        `Withdrawal to ${withdrawDto.toAddress}`
+        `Withdrawal to ${withdrawDto.toAddress}`,
+        transaction.id,
+        'wallet_withdrawal'
       );
+      
+      // Refresh user to get updated platform score
+      await this.usersRepository.findOne({ where: { id: userId } }).then(updatedUser => {
+        if (updatedUser) {
+          const platformScoreAfter = Number(parseFloat(updatedUser.platformScore?.toString() || '0'));
+          this.logger.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+          this.logger.log(`🏆 PLATFORM SCORE UPDATE (WITHDRAWAL)`);
+          this.logger.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+          this.logger.log(`👤 User ID: ${userId}`);
+          this.logger.log(`💰 Withdrawal Amount: ${withdrawDto.amount} USDT`);
+          this.logger.log(`📉 Platform Score Before: ${platformScoreBefore} USDT`);
+          this.logger.log(`📉 Platform Score After: ${platformScoreAfter} USDT`);
+          this.logger.log(`📊 Decreased by: ${platformScoreBefore - platformScoreAfter} USDT`);
+          this.logger.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+        }
+      });
       
       // Update wallet balance
       wallet.availableBalance = Math.max(0, wallet.availableBalance - withdrawDto.amount);
@@ -550,8 +570,9 @@ export class WalletService {
     }
     
     this.logger.log(`💳 SEKA Balance After: ${user.balance} SEKA`);
-    this.logger.log(`🏆 Seka-Svara Score After: ${user.platformScore}`);
-    this.logger.log(`✅ Dual balance credited! Both SEKA balance and Seka-Svara Score updated.`);
+    this.logger.log(`🏆 Platform Score After: ${user.platformScore} USDT`);
+    this.logger.log(`📊 Increased by: ${depositAmount} USDT`);
+    this.logger.log(`✅ Deposit confirmed! Platform Score increased by ${depositAmount} USDT`);
     this.logger.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
     
     return {
