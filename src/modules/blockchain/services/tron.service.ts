@@ -72,6 +72,18 @@ export class TronService {
         throw new Error('Tron service not initialized. Please configure TRON_PRIVATE_KEY and TRON_USDT_CONTRACT.');
       }
 
+      // Check admin wallet TRX balance for gas fees
+      const adminAddress = this.tronWeb.address.fromPrivateKey(this.configService.get('TRON_PRIVATE_KEY'));
+      const trxBalance = await this.tronWeb.trx.getBalance(adminAddress);
+      const trxBalanceInTRX = trxBalance / 1000000; // Convert from sun to TRX
+
+      // TRC20 transfers require Energy or TRX for fees
+      // Minimum recommended: 10 TRX for safety (covers Energy costs)
+      if (trxBalanceInTRX < 10) {
+        this.logger.warn(`⚠️ Low TRX balance: ${trxBalanceInTRX.toFixed(2)} TRX. Recommended: 10+ TRX for TRC20 transfers.`);
+        this.logger.warn(`💡 Tip: Freeze TRX to get Energy (reduces gas costs) or ensure wallet has sufficient TRX.`);
+      }
+
       // USDT on Tron uses 6 decimals
       // Try to get decimals from contract, fallback to 6 if it fails
       let decimals = 6;
@@ -84,16 +96,29 @@ export class TronService {
 
       const amountInSun = parseFloat(amount) * Math.pow(10, decimals);
 
+      this.logger.log(`📤 Initiating TRC20 transfer: ${amount} USDT to ${to}`);
+      this.logger.log(`💰 Admin wallet TRX balance: ${trxBalanceInTRX.toFixed(2)} TRX`);
+
+      // Attempt transfer - TronWeb will use Energy if available, otherwise burn TRX
       const tx = await this.USDTContract.transfer(to, amountInSun).send();
 
-      this.logger.log(`Tron transfer successful: ${tx}`);
+      this.logger.log(`✅ Tron transfer successful: ${tx}`);
       return {
         success: true,
         txHash: tx,
       };
     } catch (error) {
-      this.logger.error(`Tron transfer failed: ${error.message}`);
-      throw error;
+      // Enhanced error messages for common TRON issues
+      let errorMessage = error.message || 'Unknown error';
+      
+      if (errorMessage.includes('insufficient') || errorMessage.includes('balance')) {
+        errorMessage = `Insufficient TRX balance for gas fees. Admin wallet needs TRX for TRC20 transfers. Current balance may be too low.`;
+      } else if (errorMessage.includes('energy') || errorMessage.includes('bandwidth')) {
+        errorMessage = `Insufficient Energy/Bandwidth. Consider freezing TRX to get Energy, or ensure wallet has sufficient TRX.`;
+      }
+      
+      this.logger.error(`❌ Tron transfer failed: ${errorMessage}`);
+      throw new Error(errorMessage);
     }
   }
 
@@ -120,10 +145,39 @@ export class TronService {
 
   async estimateFee(to: string, amount: string): Promise<number> {
     try {
-      // Tron transaction fees are typically around 1-5 TRX
-      return 5; // Estimated fee in TRX
+      // TRC20 token transfers on TRON require Energy
+      // If Energy is available (from frozen TRX), fee is ~0.1-1 TRX
+      // If no Energy, TRX is burned: typically 10-20 TRX for TRC20 transfers
+      // We estimate conservatively at 15 TRX to ensure sufficient balance
+      return 15; // Estimated fee in TRX (conservative estimate)
     } catch (error) {
       this.logger.error(`Failed to estimate fee: ${error.message}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Check if admin wallet has sufficient TRX for gas fees
+   * Returns true if balance >= recommended minimum (10 TRX)
+   */
+  async checkGasBalance(): Promise<{ sufficient: boolean; balance: number; recommended: number }> {
+    try {
+      if (!this.tronWeb) {
+        throw new Error('Tron service not initialized');
+      }
+
+      const adminAddress = this.tronWeb.address.fromPrivateKey(this.configService.get('TRON_PRIVATE_KEY'));
+      const trxBalance = await this.tronWeb.trx.getBalance(adminAddress);
+      const trxBalanceInTRX = trxBalance / 1000000; // Convert from sun to TRX
+      const recommended = 10; // Minimum recommended TRX balance
+
+      return {
+        sufficient: trxBalanceInTRX >= recommended,
+        balance: trxBalanceInTRX,
+        recommended,
+      };
+    } catch (error) {
+      this.logger.error(`Failed to check gas balance: ${error.message}`);
       throw error;
     }
   }
