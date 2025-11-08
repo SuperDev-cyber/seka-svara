@@ -10,7 +10,7 @@ import { BscService } from '../blockchain/services/bsc.service';
 import { TronService } from '../blockchain/services/tron.service';
 import { DepositDto } from './dto/deposit.dto';
 import { WithdrawDto } from './dto/withdraw.dto';
-import { getAdminWalletAddress } from '../../config/admin-wallet.config';
+// Removed getAdminWalletAddress import - withdrawals now always use user's Web3Auth account address
 import { PlatformScoreService } from '../users/services/platform-score.service';
 import { ScoreTransactionType } from '../users/entities/platform-score-transaction.entity';
 
