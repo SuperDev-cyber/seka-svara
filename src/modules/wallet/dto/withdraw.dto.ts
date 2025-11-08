@@ -1,4 +1,4 @@
-import { IsString, IsNumber, IsEnum, Min } from 'class-validator';
+import { IsString, IsNumber, IsEnum, Min, IsOptional } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 
 export class WithdrawDto {
@@ -14,4 +14,9 @@ export class WithdrawDto {
   @ApiProperty({ description: 'To address' })
   @IsString()
   toAddress: string;
+
+  @ApiProperty({ description: 'From address (user\'s Web3Auth account address). If not provided, uses admin wallet.', required: false })
+  @IsOptional()
+  @IsString()
+  fromAddress?: string;
 }
