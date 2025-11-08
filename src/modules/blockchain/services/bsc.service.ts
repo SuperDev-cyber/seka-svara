@@ -15,10 +15,13 @@ export class BscService {
   private logger = new Logger('BscService');
 
   constructor(private configService: ConfigService) {
-    this.initializeProvider();
+    // Initialize provider asynchronously
+    this.initializeProvider().catch((error) => {
+      this.logger.error(`Failed to initialize BSC service: ${error.message}`);
+    });
   }
 
-  private initializeProvider() {
+  private async initializeProvider() {
     const rpcUrl = this.configService.get('BSC_RPC_URL');
     const privateKey = this.configService.get('BSC_PRIVATE_KEY');
     const USDTAddress = this.configService.get('BSC_USDT_CONTRACT');
@@ -293,7 +296,8 @@ export class BscService {
     const iface = new ethers.Interface([
       'event Transfer(address indexed from, address indexed to, uint256 value)',
     ]);
-    const topic = iface.getEventTopic('Transfer');
+    // Use ethers.id() to get the event topic hash (ethers v6 compatible)
+    const topic = ethers.id('Transfer(address,address,uint256)');
     const addressTopicValues = normalizedAddresses.map((addr) =>
       ethers.zeroPadValue(addr, 32),
     );
@@ -315,8 +319,14 @@ export class BscService {
 
     const decimals = await this.getUSDTDecimals();
 
-    return logs.map((log) => {
+    return logs.map((log, index) => {
       const parsed = iface.parseLog(log);
+      
+      // Add null check for parsed
+      if (!parsed) {
+        throw new Error(`Failed to parse log at index ${index}`);
+      }
+      
       const rawAmount = parsed.args.value as bigint;
       const formattedAmount = Number(ethers.formatUnits(rawAmount, decimals));
 
@@ -327,7 +337,8 @@ export class BscService {
         amountRaw: rawAmount,
         amount: formattedAmount,
         blockNumber: Number(log.blockNumber),
-        logIndex: log.logIndex,
+        // Use index as logIndex since log.logIndex doesn't exist in ethers v6
+        logIndex: index,
       };
     });
   }
