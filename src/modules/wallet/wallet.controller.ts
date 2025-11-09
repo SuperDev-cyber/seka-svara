@@ -35,7 +35,9 @@ export class WalletController {
   @Post('generate-address')
   @ApiOperation({ summary: 'Generate deposit address' })
   async generateAddress(@Request() req, @Body() body: { network: 'BEP20' | 'TRC20' }) {
-    return this.walletService.generateDepositAddress(req.user.id, body.network);
+    const address = await this.walletService.generateDepositAddress(req.user.id, body.network);
+    // Return as JSON object for proper parsing
+    return { address, network: body.network };
   }
 
   @Post('deposit')
