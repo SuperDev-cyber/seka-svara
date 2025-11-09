@@ -103,14 +103,12 @@ export class UsersService {
 
     // Generate addresses if they don't exist
     const addresses = {
-      TRC20: user.trc20WalletAddress || await this.walletService.generateDepositAddress(userId, 'TRC20'),
       BEP20: user.bep20WalletAddress || await this.walletService.generateDepositAddress(userId, 'BEP20'),
       ERC20: user.erc20WalletAddress || await this.walletService.generateDepositAddress(userId, 'BEP20'), // Using BEP20 for ERC20 (both Ethereum-compatible)
     };
 
     // Update user with generated addresses
     await this.update(userId, {
-      trc20WalletAddress: addresses.TRC20,
       bep20WalletAddress: addresses.BEP20,
       erc20WalletAddress: addresses.ERC20,
     });

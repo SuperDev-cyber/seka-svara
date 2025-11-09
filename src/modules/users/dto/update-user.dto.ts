@@ -16,11 +16,6 @@ export class UpdateUserDto extends PartialType(CreateUserDto) {
   @ApiProperty({ required: false })
   @IsOptional()
   @IsString()
-  trc20WalletAddress?: string;
-
-  @ApiProperty({ required: false })
-  @IsOptional()
-  @IsString()
   bep20WalletAddress?: string;
 
   @ApiProperty({ required: false })

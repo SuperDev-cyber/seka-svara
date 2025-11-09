@@ -66,9 +66,6 @@ export class User {
   experience: number;
 
   @Column({ nullable: true })
-  trc20WalletAddress: string;
-
-  @Column({ nullable: true })
   bep20WalletAddress: string;
 
   @Column({ nullable: true })
