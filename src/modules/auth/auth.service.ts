@@ -473,10 +473,15 @@ export class AuthService {
         ];
         const isAdmin = email && MASTER_ADMIN_EMAILS.includes(email);
         
+        // Generate a random password hash for Web3Auth users (they don't use passwords, but DB requires it)
+        const saltRounds = parseInt(this.configService.get('BCRYPT_ROUNDS', '12'));
+        const randomPassword = crypto.randomBytes(32).toString('hex');
+        const hashedPassword = await bcrypt.hash(randomPassword, saltRounds);
+        
         user = this.usersRepository.create({
           username: uniqueUsername,
           email: email || `${walletAddress}@web3auth.local`, // Use wallet address as email if no email provided
-          password: '', // Web3Auth users don't need a password
+          password: hashedPassword, // Web3Auth users don't use passwords, but we store a random hash for DB constraints
           emailVerified: !!email, // Verified if email from Google login
           status: UserStatus.ACTIVE,
           role: isAdmin ? UserRole.ADMIN : UserRole.USER,
