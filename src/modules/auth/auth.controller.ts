@@ -4,6 +4,7 @@ import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
+import { Web3AuthLoginDto } from './dto/web3auth-login.dto';
 import { AuthResponseDto, MessageResponseDto } from './dto/auth-response.dto';
 import { LocalAuthGuard } from './guards/local-auth.guard';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
@@ -98,6 +99,27 @@ export class AuthController {
       return await this.authService.verifyGoogleToken(body.idToken);
     } catch (error) {
       console.error('Google verify error:', error);
+      throw error;
+    }
+  }
+
+  @Post('web3auth/login')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Login or register with Web3Auth wallet' })
+  @ApiResponse({ status: 200, description: 'Web3Auth authentication successful', type: AuthResponseDto })
+  @ApiResponse({ status: 400, description: 'Bad request - invalid wallet address' })
+  async loginWithWeb3Auth(@Body() web3AuthDto: Web3AuthLoginDto): Promise<AuthResponseDto> {
+    try {
+      if (!web3AuthDto || !web3AuthDto.walletAddress) {
+        throw new BadRequestException('walletAddress is required');
+      }
+      return await this.authService.loginWithWeb3Auth(
+        web3AuthDto.walletAddress,
+        web3AuthDto.email,
+        web3AuthDto.name
+      );
+    } catch (error) {
+      console.error('Web3Auth login error:', error);
       throw error;
     }
   }

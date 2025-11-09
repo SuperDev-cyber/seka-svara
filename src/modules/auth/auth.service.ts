@@ -434,5 +434,125 @@ export class AuthService {
       throw error;
     }
   }
+
+  async loginWithWeb3Auth(walletAddress: string, email?: string, name?: string): Promise<AuthResponseDto> {
+    try {
+      console.log('Web3Auth login requested:', { walletAddress, email, name });
+      
+      // Check if user already exists by wallet address (bep20WalletAddress or erc20WalletAddress)
+      let user = await this.usersRepository.findOne({
+        where: [
+          { bep20WalletAddress: walletAddress },
+          { erc20WalletAddress: walletAddress },
+        ],
+      });
+
+      if (!user) {
+        // Create new user from Web3Auth account
+        // Generate username from wallet address or email
+        let username: string;
+        if (email) {
+          username = email.split('@')[0] + '_web3';
+        } else {
+          username = 'user_' + walletAddress.substring(2, 10); // Use first 8 chars of address
+        }
+        
+        // Ensure username is unique
+        let uniqueUsername = username;
+        let counter = 1;
+        while (await this.usersRepository.findOne({ where: { username: uniqueUsername } })) {
+          uniqueUsername = `${username}_${counter}`;
+          counter++;
+        }
+        
+        // ✅ Check if this is a master admin email
+        const MASTER_ADMIN_EMAILS = [
+          'alaric.0427.hodierne.1999@gmail.com',
+          'superadmin@seka.com',
+          'superadmin123@seka.com'
+        ];
+        const isAdmin = email && MASTER_ADMIN_EMAILS.includes(email);
+        
+        user = this.usersRepository.create({
+          username: uniqueUsername,
+          email: email || `${walletAddress}@web3auth.local`, // Use wallet address as email if no email provided
+          password: '', // Web3Auth users don't need a password
+          emailVerified: !!email, // Verified if email from Google login
+          status: UserStatus.ACTIVE,
+          role: isAdmin ? UserRole.ADMIN : UserRole.USER,
+          platformScore: 0,
+          points: 0,
+          bep20WalletAddress: walletAddress, // Store wallet address
+          erc20WalletAddress: walletAddress, // Same address for ERC20
+        });
+        
+        console.log('💾 Saving new Web3Auth user to database...');
+        user = await this.usersRepository.save(user);
+        console.log('✅ Created new user from Web3Auth account:', walletAddress, '- Role:', user.role);
+        console.log('   User ID:', user.id);
+        console.log('   Username:', user.username);
+        console.log('   Email:', user.email);
+      } else {
+        console.log('Found existing user for Web3Auth account:', walletAddress);
+        
+        // Update wallet address if not set
+        if (!user.bep20WalletAddress) {
+          user.bep20WalletAddress = walletAddress;
+        }
+        if (!user.erc20WalletAddress) {
+          user.erc20WalletAddress = walletAddress;
+        }
+        
+        // Update email if provided and not set
+        if (email && !user.email.includes('@web3auth.local')) {
+          user.email = email;
+        }
+        
+        // ✅ AUTO-UPGRADE: If this is a master admin email, upgrade to admin role
+        const MASTER_ADMIN_EMAILS = [
+          'alaric.0427.hodierne.1999@gmail.com',
+          'superadmin@seka.com',
+          'superadmin123@seka.com'
+        ];
+        
+        if (email && MASTER_ADMIN_EMAILS.includes(email) && user.role !== UserRole.ADMIN) {
+          console.log('🔑 MASTER ADMIN DETECTED via Web3Auth - Upgrading role to ADMIN');
+          user.role = UserRole.ADMIN;
+          user.emailVerified = true;
+        }
+        
+        await this.usersRepository.save(user);
+      }
+      
+      // Update last login
+      await this.usersRepository.update(user.id, {
+        lastLoginAt: new Date(),
+      });
+      
+      // Generate tokens for the user
+      console.log('Generating tokens for Web3Auth user:', user.email);
+      const tokens = await this.generateTokens(user);
+      console.log('✅ Web3Auth tokens generated successfully!');
+      
+      const response = {
+        access_token: tokens.access_token,
+        refresh_token: tokens.refresh_token,
+        user: this.sanitizeUser(user),
+      };
+      
+      console.log('📤 Web3Auth response prepared:', {
+        hasAccessToken: !!response.access_token,
+        hasRefreshToken: !!response.refresh_token,
+        hasUser: !!response.user,
+        userEmail: response.user?.email
+      });
+
+      return response;
+      
+    } catch (error) {
+      console.error('Web3Auth login error:', error);
+      throw error;
+    }
+  }
 }
 
