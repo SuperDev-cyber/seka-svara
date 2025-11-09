@@ -1,4 +1,4 @@
-import { Controller, Get, Query } from '@nestjs/common';
+import { Controller, Get, Query, ParseIntPipe, DefaultValuePipe } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { LeaderboardService } from './leaderboard.service';
 
@@ -9,19 +9,25 @@ export class LeaderboardController {
 
   @Get('top-winners')
   @ApiOperation({ summary: 'Get top winners by total winnings' })
-  async getTopWinners(@Query('limit') limit: number = 10) {
+  async getTopWinners(
+    @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number
+  ) {
     return this.leaderboardService.getTopWinners(limit);
   }
 
   @Get('top-players')
   @ApiOperation({ summary: 'Get top players by games won' })
-  async getTopPlayers(@Query('limit') limit: number = 10) {
+  async getTopPlayers(
+    @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number
+  ) {
     return this.leaderboardService.getTopPlayers(limit);
   }
 
   @Get('most-active')
   @ApiOperation({ summary: 'Get most active players' })
-  async getMostActive(@Query('limit') limit: number = 10) {
+  async getMostActive(
+    @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number
+  ) {
     return this.leaderboardService.getMostActive(limit);
   }
 
