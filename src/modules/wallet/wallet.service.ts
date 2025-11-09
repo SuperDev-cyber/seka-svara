@@ -698,6 +698,33 @@ export class WalletService {
   }
 
   /**
+   * Get TRC20 USDT balance for user's TRC20 address
+   */
+  async getTRC20Balance(userId: string) {
+    const wallet = await this.getUserWallet(userId);
+    
+    if (!wallet.trc20Address) {
+      throw new BadRequestException('TRC20 address not generated. Please generate a TRC20 address first.');
+    }
+
+    if (!this.tronService) {
+      throw new BadRequestException('Tron service not available');
+    }
+
+    try {
+      const balance = await this.tronService.getBalance(wallet.trc20Address);
+      return {
+        address: wallet.trc20Address,
+        balance: parseFloat(balance),
+        balanceFormatted: parseFloat(balance).toFixed(2),
+      };
+    } catch (error) {
+      this.logger.error(`Failed to get TRC20 balance: ${error.message}`);
+      throw new BadRequestException(`Failed to fetch TRC20 balance: ${error.message}`);
+    }
+  }
+
+  /**
    * Get wallet statistics
    */
   async getWalletStats(userId: string) {

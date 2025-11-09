@@ -86,6 +86,12 @@ export class WalletController {
     return this.walletService.getWalletAddresses(req.user.id);
   }
 
+  @Get('trc20-balance')
+  @ApiOperation({ summary: 'Get TRC20 USDT balance for user\'s TRC20 address' })
+  async getTRC20Balance(@Request() req) {
+    return this.walletService.getTRC20Balance(req.user.id);
+  }
+
   @Public()
   @Get('admin-addresses')
   @ApiOperation({ summary: 'Get admin wallet addresses for deposits' })
