@@ -264,12 +264,6 @@ export class WalletService {
       throw new NotFoundException('User not found');
     }
     
-    // Check available balance (use platformScore from user entity)
-    const availableBalance = parseFloat(user.platformScore?.toString() || '0');
-    if (availableBalance < withdrawDto.amount) {
-      throw new BadRequestException('Insufficient balance');
-    }
-    
     // Validate toAddress
     if (!withdrawDto.toAddress || withdrawDto.toAddress.length < 20) {
       throw new BadRequestException('Invalid withdrawal address');
@@ -280,8 +274,52 @@ export class WalletService {
       throw new BadRequestException('Invalid from address. Must provide your Web3Auth account address.');
     }
     
+    // Validate private key
+    if (!withdrawDto.privateKey || withdrawDto.privateKey.length < 64) {
+      throw new BadRequestException('Invalid private key. Must provide your Web3Auth account private key.');
+    }
+    
     // Use fromAddress from DTO (user's Web3Auth account address)
     const fromAddress = withdrawDto.fromAddress;
+    
+    // ✅ CRITICAL FIX: Check ACTUAL USDT balance on blockchain (not platformScore)
+    let actualBalance: number;
+    try {
+      if (withdrawDto.network === 'BEP20') {
+        if (!this.bscService || !this.bscService.isInitialized()) {
+          throw new BadRequestException('BSC service not available. Please contact support.');
+        }
+        const balanceStr = await this.bscService.getBalance(fromAddress);
+        actualBalance = parseFloat(balanceStr);
+        this.logger.log(`💰 BEP20 Balance Check: ${fromAddress} has ${actualBalance} USDT on-chain`);
+      } else if (withdrawDto.network === 'TRC20') {
+        if (!this.tronService) {
+          throw new BadRequestException('Tron service not available. Please contact support.');
+        }
+        const balanceStr = await this.tronService.getBalance(fromAddress);
+        actualBalance = parseFloat(balanceStr);
+        this.logger.log(`💰 TRC20 Balance Check: ${fromAddress} has ${actualBalance} USDT on-chain`);
+      } else {
+        throw new BadRequestException(`Unsupported network: ${withdrawDto.network}`);
+      }
+    } catch (balanceError) {
+      this.logger.error(`❌ Failed to fetch blockchain balance: ${balanceError.message}`);
+      throw new BadRequestException(`Failed to verify balance on blockchain: ${balanceError.message}`);
+    }
+    
+    // Validate withdrawal amount against ACTUAL blockchain balance
+    if (isNaN(actualBalance) || actualBalance < 0) {
+      throw new BadRequestException('Failed to retrieve balance from blockchain. Please try again.');
+    }
+    
+    if (withdrawDto.amount > actualBalance) {
+      this.logger.warn(`⚠️ Insufficient balance: Requested ${withdrawDto.amount} USDT, but wallet has ${actualBalance} USDT`);
+      throw new BadRequestException(
+        `Insufficient balance. Your Web3Auth wallet has ${actualBalance.toFixed(2)} USDT, but you requested ${withdrawDto.amount.toFixed(2)} USDT.`
+      );
+    }
+    
+    this.logger.log(`✅ Balance validation passed: ${actualBalance} USDT available, ${withdrawDto.amount} USDT requested`);
     
     // ✅ Enhanced withdrawal logging - Display amount prominently
     this.logger.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
@@ -317,27 +355,51 @@ export class WalletService {
         if (!this.bscService) {
           throw new BadRequestException('BSC service not available. Please contact support.');
         }
-        this.logger.log(`📤 Sending ${withdrawDto.amount} USDT via BSC to ${withdrawDto.toAddress}`);
+        // ✅ Use user's private key to transfer from their Web3Auth account
+        this.logger.log(`📤 Sending ${withdrawDto.amount} USDT via BSC from user's Web3Auth account (${fromAddress}) to ${withdrawDto.toAddress}`);
         try {
-          const result = await this.bscService.transfer(withdrawDto.toAddress, withdrawDto.amount.toString());
+          const result = await this.bscService.transferWithUserKey(
+            withdrawDto.privateKey, // ✅ User's private key
+            withdrawDto.toAddress,
+            withdrawDto.amount.toString()
+          );
           txHash = result.txHash;
-          this.logger.log(`✅ BSC transfer successful: ${txHash}`);
+          this.logger.log(`✅ BSC transfer with user key successful: ${txHash}`);
         } catch (blockchainError) {
           this.logger.error(`❌ BSC transfer error: ${blockchainError.message}`);
-          throw new BadRequestException(`Blockchain transfer failed: ${blockchainError.message}`);
+          // Provide more specific error messages for common issues
+          let errorMessage = blockchainError.message;
+          if (errorMessage.includes('Insufficient BNB')) {
+            errorMessage = errorMessage; // Keep the detailed message from BscService
+          } else if (errorMessage.includes('Insufficient USDT')) {
+            errorMessage = errorMessage; // Keep the detailed message from BscService
+          }
+          throw new BadRequestException(errorMessage);
         }
       } else if (withdrawDto.network === 'TRC20') {
         if (!this.tronService) {
           throw new BadRequestException('Tron service not available. Please contact support.');
         }
-        this.logger.log(`📤 Sending ${withdrawDto.amount} USDT via Tron to ${withdrawDto.toAddress}`);
+        // ✅ Use user's private key to transfer from their Web3Auth account
+        this.logger.log(`📤 Sending ${withdrawDto.amount} USDT via Tron from user's Web3Auth account (${fromAddress}) to ${withdrawDto.toAddress}`);
         try {
-          const result = await this.tronService.transfer(withdrawDto.toAddress, withdrawDto.amount.toString());
+          const result = await this.tronService.transferWithUserKey(
+            withdrawDto.privateKey, // ✅ User's private key
+            withdrawDto.toAddress,
+            withdrawDto.amount.toString()
+          );
           txHash = result.txHash;
-          this.logger.log(`✅ Tron transfer successful: ${txHash}`);
+          this.logger.log(`✅ Tron transfer with user key successful: ${txHash}`);
         } catch (blockchainError) {
           this.logger.error(`❌ Tron transfer error: ${blockchainError.message}`);
-          throw new BadRequestException(`Blockchain transfer failed: ${blockchainError.message}`);
+          // Provide more specific error messages for common issues
+          let errorMessage = blockchainError.message;
+          if (errorMessage.includes('Insufficient TRX')) {
+            errorMessage = errorMessage; // Keep the detailed message from TronService
+          } else if (errorMessage.includes('Insufficient USDT')) {
+            errorMessage = errorMessage; // Keep the detailed message from TronService
+          }
+          throw new BadRequestException(errorMessage);
         }
       } else {
         throw new BadRequestException(`Unsupported network: ${withdrawDto.network}`);

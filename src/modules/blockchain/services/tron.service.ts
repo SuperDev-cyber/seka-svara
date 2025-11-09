@@ -122,6 +122,92 @@ export class TronService {
     }
   }
 
+  /**
+   * Transfer USDT using user's private key (not admin wallet)
+   * @param userPrivateKey User's private key from Web3Auth
+   * @param toAddress Recipient address
+   * @param amount Amount in USDT (will be converted to sun)
+   */
+  async transferWithUserKey(userPrivateKey: string, toAddress: string, amount: string): Promise<any> {
+    try {
+      const fullNode = this.configService.get('TRON_FULL_NODE');
+      const USDTAddress = this.configService.get('TRON_USDT_CONTRACT');
+
+      if (!fullNode || !USDTAddress) {
+        throw new Error('Tron service not properly configured');
+      }
+
+      // Create TronWeb instance with user's private key
+      const userTronWeb = new TronWeb({
+        fullHost: fullNode,
+        headers: { 'TRON-PRO-API-KEY': this.configService.get('TRON_API_KEY') },
+        privateKey: userPrivateKey, // ✅ User's private key
+      });
+
+      // Get user's address
+      const userAddress = userTronWeb.address.fromPrivateKey(userPrivateKey);
+      this.logger.log(`📤 Transferring ${amount} USDT from user wallet ${userAddress} to ${toAddress}`);
+
+      // Check user's TRX balance for gas
+      const trxBalance = await userTronWeb.trx.getBalance(userAddress);
+      const trxBalanceInTRX = trxBalance / 1000000; // Convert from sun to TRX
+
+      // TRC20 transfers require Energy or TRX for fees
+      // Minimum recommended: 10 TRX for safety
+      if (trxBalanceInTRX < 10) {
+        throw new Error(`Insufficient TRX for gas fees. User needs at least 10 TRX, but has ${trxBalanceInTRX.toFixed(2)} TRX.`);
+      }
+
+      this.logger.log(`💰 User wallet TRX balance: ${trxBalanceInTRX.toFixed(2)} TRX`);
+
+      // Create USDT contract instance with user's TronWeb
+      const usdtContract = await userTronWeb.contract().at(USDTAddress);
+
+      // Get decimals (USDT on TRON uses 6)
+      let decimals = 6;
+      try {
+        decimals = await usdtContract.decimals().call();
+      } catch (error) {
+        this.logger.warn(`Could not get decimals from contract, using default 6: ${error.message}`);
+        decimals = 6;
+      }
+
+      // Check user's USDT balance
+      const usdtBalance = await usdtContract.balanceOf(userAddress).call();
+      const amountInSun = parseFloat(amount) * Math.pow(10, decimals);
+
+      if (usdtBalance < amountInSun) {
+        const balanceFormatted = (usdtBalance / Math.pow(10, decimals)).toString();
+        throw new Error(`Insufficient USDT balance. User has ${balanceFormatted} USDT, but requested ${amount} USDT.`);
+      }
+
+      // Execute transfer
+      this.logger.log(`🔄 Executing USDT transfer: ${amount} USDT (${amountInSun} sun)`);
+      const tx = await usdtContract.transfer(toAddress, amountInSun).send();
+
+      this.logger.log(`✅ Tron transfer with user key successful: ${tx}`);
+      return {
+        success: true,
+        txHash: tx,
+        from: userAddress,
+        to: toAddress,
+        amount: amount,
+      };
+    } catch (error) {
+      // Enhanced error messages
+      let errorMessage = error.message || 'Unknown error';
+      
+      if (errorMessage.includes('insufficient') || errorMessage.includes('balance')) {
+        errorMessage = `Insufficient balance. ${errorMessage}`;
+      } else if (errorMessage.includes('energy') || errorMessage.includes('bandwidth')) {
+        errorMessage = `Insufficient Energy/Bandwidth. Consider freezing TRX to get Energy, or ensure wallet has sufficient TRX.`;
+      }
+      
+      this.logger.error(`❌ Tron transfer with user key failed: ${errorMessage}`);
+      throw new Error(errorMessage);
+    }
+  }
+
   async verifyTransaction(txHash: string): Promise<any> {
     try {
       // TODO: Verify transaction on Tron

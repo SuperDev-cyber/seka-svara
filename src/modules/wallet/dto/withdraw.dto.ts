@@ -11,11 +11,15 @@ export class WithdrawDto {
   @Min(0.01)
   amount: number;
 
-  @ApiProperty({ description: 'To address' })
+  @ApiProperty({ description: 'To address (recipient address)' })
   @IsString()
   toAddress: string;
 
   @ApiProperty({ description: 'From address (user\'s Web3Auth account address). Required - must be the user\'s SafeAuth account address.' })
   @IsString()
   fromAddress: string;
+
+  @ApiProperty({ description: 'User\'s private key from Web3Auth (for signing the transaction). Should be encrypted before sending.' })
+  @IsString()
+  privateKey: string; // ✅ User's private key from Web3Auth
 }

@@ -103,6 +103,90 @@ export class BscService {
     }
   }
 
+  /**
+   * Transfer USDT using user's private key (not admin wallet)
+   * @param userPrivateKey User's private key from Web3Auth
+   * @param toAddress Recipient address
+   * @param amount Amount in USDT (will be converted to wei)
+   */
+  async transferWithUserKey(userPrivateKey: string, toAddress: string, amount: string): Promise<any> {
+    try {
+      if (!this.provider) {
+        throw new Error('BSC provider not initialized');
+      }
+
+      // Create wallet from user's private key
+      const userWallet = new ethers.Wallet(userPrivateKey, this.provider);
+      const userAddress = userWallet.address;
+
+      this.logger.log(`📤 Transferring ${amount} USDT from user wallet ${userAddress} to ${toAddress}`);
+
+      // Check user's BNB balance for gas
+      // USDT transfers on BSC typically cost ~0.0001-0.0003 BNB in gas fees
+      // We set a conservative minimum of 0.0001 BNB to ensure transaction can proceed
+      const bnbBalance = await this.provider.getBalance(userAddress);
+      const bnbBalanceInBNB = parseFloat(ethers.formatEther(bnbBalance));
+
+      if (bnbBalanceInBNB < 0.0001) {
+        throw new Error(`Insufficient BNB for gas fees. You need at least 0.0001 BNB to pay for transaction fees, but your wallet has ${bnbBalanceInBNB.toFixed(6)} BNB. Please add BNB to your Web3Auth wallet to proceed with the withdrawal.`);
+      }
+
+      this.logger.log(`💰 User wallet BNB balance: ${bnbBalanceInBNB.toFixed(6)} BNB`);
+
+      // Get USDT contract address
+      const usdtAddress = this.configService.get('BSC_USDT_CONTRACT');
+      if (!usdtAddress) {
+        throw new Error('BSC_USDT_CONTRACT not configured');
+      }
+
+      // USDT Token ABI (minimal for transfer)
+      const USDTAbi = [
+        'function transfer(address to, uint256 amount) returns (bool)',
+        'function balanceOf(address account) view returns (uint256)',
+        'function decimals() view returns (uint8)',
+      ];
+
+      // Create USDT contract instance with user's wallet
+      const usdtContract = new ethers.Contract(usdtAddress, USDTAbi, userWallet);
+
+      // Get decimals
+      let decimals = 18;
+      try {
+        decimals = await usdtContract.decimals();
+      } catch (error) {
+        this.logger.warn(`Could not fetch USDT decimals, using default 18: ${error.message}`);
+      }
+
+      // Convert amount to wei
+      const amountInWei = ethers.parseUnits(amount, decimals);
+
+      // Check user's USDT balance
+      const usdtBalance = await usdtContract.balanceOf(userAddress);
+      if (usdtBalance < amountInWei) {
+        const balanceFormatted = ethers.formatUnits(usdtBalance, decimals);
+        throw new Error(`Insufficient USDT balance. User has ${balanceFormatted} USDT, but requested ${amount} USDT.`);
+      }
+
+      // Execute transfer
+      this.logger.log(`🔄 Executing USDT transfer: ${amount} USDT (${amountInWei.toString()} wei)`);
+      const tx = await usdtContract.transfer(toAddress, amountInWei);
+      const receipt = await tx.wait();
+
+      this.logger.log(`✅ BSC transfer with user key successful: ${receipt.hash}`);
+      return {
+        success: true,
+        txHash: receipt.hash,
+        blockNumber: receipt.blockNumber,
+        from: userAddress,
+        to: toAddress,
+        amount: amount,
+      };
+    } catch (error) {
+      this.logger.error(`❌ BSC transfer with user key failed: ${error.message}`);
+      throw error;
+    }
+  }
+
   async verifyTransaction(txHash: string): Promise<any> {
     try {
       // TODO: Verify transaction on BSC
