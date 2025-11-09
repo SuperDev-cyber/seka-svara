@@ -34,7 +34,7 @@ export class WalletController {
 
   @Post('generate-address')
   @ApiOperation({ summary: 'Generate deposit address' })
-  async generateAddress(@Request() req, @Body() body: { network: 'BEP20' | 'TRC20' }) {
+  async generateAddress(@Request() req, @Body() body: { network: 'BEP20' }) {
     const address = await this.walletService.generateDepositAddress(req.user.id, body.network);
     // Return as JSON object for proper parsing
     return { address, network: body.network };
@@ -88,16 +88,11 @@ export class WalletController {
     return this.walletService.getWalletAddresses(req.user.id);
   }
 
-  @Get('trc20-balance')
-  @ApiOperation({ summary: 'Get TRC20 USDT balance for user\'s TRC20 address' })
-  async getTRC20Balance(@Request() req) {
-    return this.walletService.getTRC20Balance(req.user.id);
-  }
 
   @Public()
   @Get('admin-addresses')
   @ApiOperation({ summary: 'Get admin wallet addresses for deposits' })
-  async getAdminAddresses(@Query('network') network?: 'BEP20' | 'TRC20') {
+  async getAdminAddresses(@Query('network') network?: 'BEP20') {
     if (network) {
       return {
         network,
@@ -113,11 +108,6 @@ export class WalletController {
         network: ADMIN_WALLETS.BEP20.network,
         chainId: ADMIN_WALLETS.BEP20.chainId,
         USDTContractAddress: ADMIN_WALLETS.BEP20.USDTContractAddress,
-      },
-      TRC20: {
-        address: ADMIN_WALLETS.TRC20.address,
-        network: ADMIN_WALLETS.TRC20.network,
-        USDTContractAddress: ADMIN_WALLETS.TRC20.USDTContractAddress,
       },
     };
   }

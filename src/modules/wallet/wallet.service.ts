@@ -7,7 +7,6 @@ import { User } from '../users/entities/user.entity';
 import { AddressGeneratorService } from './services/address-generator.service';
 import { BlockchainService } from '../blockchain/blockchain.service';
 import { BscService } from '../blockchain/services/bsc.service';
-import { TronService } from '../blockchain/services/tron.service';
 import { DepositDto } from './dto/deposit.dto';
 import { WithdrawDto } from './dto/withdraw.dto';
 // Removed getAdminWalletAddress import - withdrawals now always use user's Web3Auth account address
@@ -32,8 +31,6 @@ export class WalletService {
     private blockchainService?: BlockchainService,
     @Optional() @Inject(BscService)
     private bscService?: BscService,
-    @Optional() @Inject(TronService)
-    private tronService?: TronService,
   ) {}
 
   async getUserWallet(userId: string) {
@@ -44,7 +41,6 @@ export class WalletService {
       wallet = this.walletsRepository.create({ 
         userId,
         bep20Address: this.addressGeneratorService.generateBEP20Address(userId),
-        trc20Address: this.addressGeneratorService.generateTRC20Address(userId),
       });
       await this.walletsRepository.save(wallet);
     }
@@ -129,7 +125,7 @@ export class WalletService {
     };
   }
 
-  async generateDepositAddress(userId: string, network: 'BEP20' | 'TRC20') {
+  async generateDepositAddress(userId: string, network: 'BEP20') {
     const wallet = await this.getUserWallet(userId);
     
     if (network === 'BEP20') {
@@ -138,15 +134,9 @@ export class WalletService {
         await this.walletsRepository.save(wallet);
       }
       return wallet.bep20Address;
-    } else if (network === 'TRC20') {
-      if (!wallet.trc20Address) {
-        wallet.trc20Address = this.addressGeneratorService.generateTRC20Address(userId);
-        await this.walletsRepository.save(wallet);
-      }
-      return wallet.trc20Address;
     }
     
-    throw new BadRequestException('Invalid network type');
+    throw new BadRequestException('Invalid network type. Only BEP20 is supported.');
   }
 
   /**
@@ -175,15 +165,8 @@ export class WalletService {
         await this.walletsRepository.save(wallet);
       }
       userDepositAddress = wallet.bep20Address;
-    } else if (depositDto.network === 'TRC20') {
-      if (!wallet.trc20Address) {
-        // Generate address if it doesn't exist
-        wallet.trc20Address = this.addressGeneratorService.generateTRC20Address(userId);
-        await this.walletsRepository.save(wallet);
-      }
-      userDepositAddress = wallet.trc20Address;
     } else {
-      throw new BadRequestException('Invalid network type');
+      throw new BadRequestException('Invalid network type. Only BEP20 is supported.');
     }
     
     this.logger.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
@@ -292,15 +275,8 @@ export class WalletService {
         const balanceStr = await this.bscService.getBalance(fromAddress);
         actualBalance = parseFloat(balanceStr);
         this.logger.log(`💰 BEP20 Balance Check: ${fromAddress} has ${actualBalance} USDT on-chain`);
-      } else if (withdrawDto.network === 'TRC20') {
-        if (!this.tronService) {
-          throw new BadRequestException('Tron service not available. Please contact support.');
-        }
-        const balanceStr = await this.tronService.getBalance(fromAddress);
-        actualBalance = parseFloat(balanceStr);
-        this.logger.log(`💰 TRC20 Balance Check: ${fromAddress} has ${actualBalance} USDT on-chain`);
       } else {
-        throw new BadRequestException(`Unsupported network: ${withdrawDto.network}`);
+        throw new BadRequestException(`Unsupported network: ${withdrawDto.network}. Only BEP20 is supported.`);
       }
     } catch (balanceError) {
       this.logger.error(`❌ Failed to fetch blockchain balance: ${balanceError.message}`);
@@ -376,33 +352,8 @@ export class WalletService {
           }
           throw new BadRequestException(errorMessage);
         }
-      } else if (withdrawDto.network === 'TRC20') {
-        if (!this.tronService) {
-          throw new BadRequestException('Tron service not available. Please contact support.');
-        }
-        // ✅ Use user's private key to transfer from their Web3Auth account
-        this.logger.log(`📤 Sending ${withdrawDto.amount} USDT via Tron from user's Web3Auth account (${fromAddress}) to ${withdrawDto.toAddress}`);
-        try {
-          const result = await this.tronService.transferWithUserKey(
-            withdrawDto.privateKey, // ✅ User's private key
-            withdrawDto.toAddress,
-            withdrawDto.amount.toString()
-          );
-          txHash = result.txHash;
-          this.logger.log(`✅ Tron transfer with user key successful: ${txHash}`);
-        } catch (blockchainError) {
-          this.logger.error(`❌ Tron transfer error: ${blockchainError.message}`);
-          // Provide more specific error messages for common issues
-          let errorMessage = blockchainError.message;
-          if (errorMessage.includes('Insufficient TRX')) {
-            errorMessage = errorMessage; // Keep the detailed message from TronService
-          } else if (errorMessage.includes('Insufficient USDT')) {
-            errorMessage = errorMessage; // Keep the detailed message from TronService
-          }
-          throw new BadRequestException(errorMessage);
-        }
       } else {
-        throw new BadRequestException(`Unsupported network: ${withdrawDto.network}`);
+        throw new BadRequestException(`Unsupported network: ${withdrawDto.network}. Only BEP20 is supported.`);
       }
       
       // Update transaction with hash
@@ -509,7 +460,7 @@ export class WalletService {
       .andWhere(
         '(transaction.fromAddress IN (:...userAddresses) OR transaction.toAddress IN (:...userAddresses) OR transaction."walletId"::uuid = :walletId)',
         { 
-          userAddresses: [wallet.bep20Address, wallet.trc20Address].filter(addr => !!addr),
+          userAddresses: [wallet.bep20Address].filter(addr => !!addr),
           walletId: wallet.id 
         }
       )
@@ -518,7 +469,7 @@ export class WalletService {
       .getMany();
     
     this.logger.log(`📊 Found ${transactions.length} transactions for user ${user.email}`);
-    this.logger.log(`🔍 Filtered by wallet addresses: ${[wallet.bep20Address, wallet.trc20Address].filter(addr => !!addr).join(', ')}`);
+    this.logger.log(`🔍 Filtered by wallet addresses: ${[wallet.bep20Address].filter(addr => !!addr).join(', ')}`);
     
     return transactions;
   }
@@ -693,36 +644,9 @@ export class WalletService {
     const wallet = await this.getUserWallet(userId);
     return {
       BEP20: wallet.bep20Address,
-      TRC20: wallet.trc20Address,
     };
   }
 
-  /**
-   * Get TRC20 USDT balance for user's TRC20 address
-   */
-  async getTRC20Balance(userId: string) {
-    const wallet = await this.getUserWallet(userId);
-    
-    if (!wallet.trc20Address) {
-      throw new BadRequestException('TRC20 address not generated. Please generate a TRC20 address first.');
-    }
-
-    if (!this.tronService) {
-      throw new BadRequestException('Tron service not available');
-    }
-
-    try {
-      const balance = await this.tronService.getBalance(wallet.trc20Address);
-      return {
-        address: wallet.trc20Address,
-        balance: parseFloat(balance),
-        balanceFormatted: parseFloat(balance).toFixed(2),
-      };
-    } catch (error) {
-      this.logger.error(`Failed to get TRC20 balance: ${error.message}`);
-      throw new BadRequestException(`Failed to fetch TRC20 balance: ${error.message}`);
-    }
-  }
 
   /**
    * Get wallet statistics
@@ -770,7 +694,7 @@ export class WalletService {
       .andWhere(
         '(transaction.fromAddress IN (:...userAddresses) OR transaction.toAddress IN (:...userAddresses) OR transaction.walletId = :walletId)',
         { 
-          userAddresses: [wallet.bep20Address, wallet.trc20Address].filter(addr => !!addr),
+          userAddresses: [wallet.bep20Address].filter(addr => !!addr),
           walletId: wallet.id 
         }
       )
