@@ -191,8 +191,8 @@ export class AdminService {
         frontendStatus = 'Block';
       }
 
-      // Get wallet address (prefer BEP20, fallback to TRC20 or ERC20)
-      const walletAddress = user.bep20WalletAddress || user.trc20WalletAddress || user.erc20WalletAddress || 'N/A';
+      // Get wallet address (prefer BEP20, fallback to ERC20)
+      const walletAddress = user.bep20WalletAddress || user.erc20WalletAddress || 'N/A';
       
       // Format wallet address to show first 6 and last 6 characters
       const formattedWallet = walletAddress !== 'N/A' && walletAddress.length > 12
@@ -329,7 +329,7 @@ export class AdminService {
         netLockedFunds: totalDeposits - totalWithdrawals, // Net funds in platform
         activeUsers: activeUsers,
         currency: 'USDT',
-        network: 'MAINNET (BEP20/TRC20)',
+        network: 'MAINNET (BEP20)',
         lastUpdated: new Date().toISOString(),
       };
     } catch (error) {
