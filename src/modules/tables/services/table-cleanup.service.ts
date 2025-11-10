@@ -28,12 +28,6 @@ export class TableCleanupService {
    */
   @Cron('0 * * * * *')
   async cleanupEmptyTables() {
-    // Feature flag: allow disabling cleanup during testing
-    const isEnabled = (process.env.TABLE_CLEANUP_ENABLED || 'false').toLowerCase() === 'true';
-    if (!isEnabled) {
-      // Keep tables intact while testing
-      return;
-    }
     try {
       const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000); // 1 hour ago
 
