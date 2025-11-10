@@ -38,14 +38,15 @@ export class GameEngine {
     playerId: string,
     action: BettingAction,
     amount: number = 0,
+    privateKey?: string,
   ): Promise<Game> {
     // Validate game is in correct phase
     if (game.state.phase !== GamePhase.BETTING) {
       throw new Error('Game is not in betting phase');
     }
 
-    // Process the betting action
-    await this.bettingService.processBet(game, playerId, action, amount);
+    // Process the betting action (now includes privateKey for USDT transfers)
+    await this.bettingService.processBet(game, playerId, action, amount, privateKey);
 
     // Check if betting round is complete and should advance
     if (this.gameStateService.shouldMoveToShowdown(game)) {

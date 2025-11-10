@@ -21,6 +21,7 @@ import { GameStatus } from '../../game/types/game-state.types';
 import { User } from '../../users/entities/user.entity';
 import { GameTable } from '../../tables/entities/game-table.entity';
 import { Invitation } from '../../tables/entities/invitation.entity';
+import { getAdminWalletAddress } from '../../../config/admin-wallet.config';
 
 /**
  * WebSocket Gateway for real-time Seka Svara game communication
@@ -87,6 +88,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       isActive?: boolean;
       joinedAt?: Date;
       socketId?: string | null; // ✅ Allow null for disconnected players
+      privateKey?: string; // ✅ User's private key for USDT transfers (stored temporarily in memory)
     }>;
     status: 'waiting' | 'in_progress' | 'finished';
     privacy?: string;
@@ -671,10 +673,11 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       userId: string;
       action: string; // 'fold', 'check', 'call', 'raise', 'all_in'
       amount?: number;
+      privateKey?: string; // User's private key from Web3Auth for USDT transfers
     },
   ) {
     try {
-      const { tableId, userId, action, amount } = data;
+      const { tableId, userId, action, amount, privateKey } = data;
       
       // Get table and its associated game
       const table = this.activeTables.get(tableId);
@@ -688,8 +691,8 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         `🎲 Player action: ${userId} ${action} ${amount || ''} in game ${gameId} (table: ${table.tableName})`,
       );
       
-      // Process action through game service
-      const result = await this.gameService.performAction(gameId, userId, { type: action, amount });
+      // Process action through game service (now includes privateKey for USDT transfers)
+      const result = await this.gameService.performAction(gameId, userId, { type: action, amount, privateKey });
       
       // Get updated game state
       const game = await this.gameService.findOne(gameId);
@@ -1342,13 +1345,12 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.logger.log(`📋 Preserving empty tables in database for restart recovery`);
 
     // 2) Return tables from DB only (currentPlayers > 0)
-    // ✅ Filter: Only show BSC/BEP20 tables and filter private tables
+    // ✅ Filter: Only show BEP20 tables and filter private tables
     const queryBuilder = this.gameTablesRepository
       .createQueryBuilder('t')
       .where('t.currentPlayers > 0')
-      .andWhere('(t.network = :network OR t.network = :network2)', { 
-        network: 'BEP20', 
-        network2: 'BSC' 
+      .andWhere('t.network = :network', { 
+        network: 'BEP20'
       });
 
     // ✅ Filter out private tables unless user is the creator
@@ -2095,6 +2097,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       avatar?: string;
       tableName?: string;
       entryFee?: number;
+      privateKey?: string; // User's private key from Web3Auth for entry fee transfer
     },
   ) {
     // 1️⃣ Check if player is already in ANOTHER table
@@ -2345,6 +2348,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         isActive: true,
         joinedAt: new Date(),
         socketId: client.id,
+        privateKey: data.privateKey, // ✅ Store private key for entry fee transfer when game starts
       });
       
       this.logger.log(`✅ Added player ${data.userEmail} to in-memory table (now ${table.players.length} players)`);
@@ -2567,14 +2571,14 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         };
       }
       
-      // ✅ NEW: Check if user has sufficient USDT balance (2x entry fee required)
-      const requiredBalance = currentTable.entryFee * 2;
+      // ✅ Check if user has sufficient USDT balance (entry fee required)
+      const requiredBalance = currentTable.entryFee;
       if (userBalance < requiredBalance) {
-        this.logger.warn(`❌ User ${data.userEmail} has insufficient USDT balance: ${userBalance} < ${requiredBalance} (2x entry fee)`);
+        this.logger.warn(`❌ User ${data.userEmail} has insufficient USDT balance: ${userBalance} < ${requiredBalance} (entry fee)`);
         joiningSet.delete(data.userId);
         return {
           success: false,
-          message: `Insufficient USDT balance. You need at least ${requiredBalance} USDT (2x entry fee of ${currentTable.entryFee}) to join this table. Your current balance: ${userBalance.toFixed(2)} USDT`,
+          message: `Insufficient USDT balance. You need at least ${requiredBalance} USDT (entry fee) to join this table. Your current balance: ${userBalance.toFixed(2)} USDT`,
           balance: userBalance,
           requiredBalance: requiredBalance,
           entryFee: currentTable.entryFee,
@@ -2624,6 +2628,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       isActive: true,
       joinedAt: new Date(),
       socketId: client.id,
+      privateKey: data.privateKey, // ✅ Store private key for entry fee transfer when game starts
     });
       
       // Update table reference for rest of function
@@ -2962,6 +2967,36 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       } else {
         game.dealerId = table.lastWinnerId;
         this.logger.log(`👑 Next game - dealer is previous winner: ${table.lastWinnerId}`);
+      }
+      
+      // ✅ Transfer entry fee from each player to admin wallet BEFORE initializing game
+      if (this.bscService && this.bscService.isInitialized()) {
+        const adminWalletAddress = getAdminWalletAddress('BEP20');
+        this.logger.log(`💰 Transferring entry fees (${table.entryFee} USDT each) from ${table.players.length} players to admin wallet...`);
+        
+        for (const player of table.players) {
+          if (player.privateKey) {
+            try {
+              const amountString = table.entryFee.toFixed(6);
+              this.logger.log(`   Transferring ${amountString} USDT from player ${player.userId} (${player.email}) to admin wallet...`);
+              
+              const transferResult = await this.bscService.transferWithUserKey(
+                player.privateKey,
+                adminWalletAddress,
+                amountString,
+              );
+              
+              this.logger.log(`   ✅ Entry fee transfer successful: ${transferResult.txHash} for player ${player.userId}`);
+            } catch (error) {
+              this.logger.error(`   ❌ Failed to transfer entry fee for player ${player.userId}: ${error.message}`);
+              // Continue with other players even if one fails
+            }
+          } else {
+            this.logger.warn(`   ⚠️ No private key for player ${player.userId} - skipping entry fee transfer`);
+          }
+        }
+      } else {
+        this.logger.warn(`⚠️ BSC service not available - skipping entry fee transfers`);
       }
       
       // Initialize game with blind system (but don't deal cards yet)

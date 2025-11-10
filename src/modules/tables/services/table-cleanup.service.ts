@@ -7,7 +7,7 @@ import { TablePlayer } from '../entities/table-player.entity';
 
 /**
  * Service to automatically clean up empty or single-player game tables
- * that have been in that state for more than 1 minute.
+ * that have been in that state for more than 1 hour.
  */
 @Injectable()
 export class TableCleanupService {
@@ -22,24 +22,24 @@ export class TableCleanupService {
 
   /**
    * Runs every minute to clean up tables with 0 or 1 players
-   * that have been waiting for more than 1 minute.
+   * that have been waiting for more than 1 hour.
    * 
    * Cron expression: every minute at second 0
    */
   @Cron('0 * * * * *')
   async cleanupEmptyTables() {
     try {
-      const oneMinuteAgo = new Date(Date.now() - 60 * 1000); // 1 minute ago
+      const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000); // 1 hour ago
 
       // Find all tables that:
       // 1. Have 0 or 1 players (currentPlayers <= 1)
       // 2. Are in 'waiting' status (not actively playing)
-      // 3. Were created more than 1 minute ago
+      // 3. Were created more than 1 hour ago
       const tablesToDelete = await this.gameTablesRepository
         .createQueryBuilder('table')
         .where('table.status = :status', { status: 'waiting' })
         .andWhere('table.currentPlayers <= :maxPlayers', { maxPlayers: 1 })
-        .andWhere('table.createdAt < :oneMinuteAgo', { oneMinuteAgo })
+        .andWhere('table.createdAt < :oneHourAgo', { oneHourAgo })
         .getMany();
 
       if (tablesToDelete.length === 0) {

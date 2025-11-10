@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, Inject, Logger } from '@nestjs/common';
+import { Injectable, BadRequestException, Inject, Logger, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Game } from '../entities/game.entity';
@@ -11,6 +11,8 @@ import { GamePhase, GameStatus } from '../types/game-state.types';
 import { Hand } from '../types/card.types';
 import { BettingAction } from '../types/betting.types';
 import { PlatformBalanceService } from '../../users/services/platform-balance.service';
+import { BscService } from '../../blockchain/services/bsc.service';
+import { getAdminWalletAddress } from '../../../config/admin-wallet.config';
 
 /**
  * GameStateService - Manages complete game flow for Seka Svara
@@ -38,6 +40,7 @@ export class GameStateService {
     private readonly handEvaluatorService: HandEvaluatorService,
     private readonly bettingService: BettingService,
     private readonly platformBalanceService: PlatformBalanceService,
+    @Optional() private readonly bscService?: BscService,
   ) {}
 
   /**
@@ -292,19 +295,40 @@ export class GameStateService {
           winnerPlayer.winnings = amountPerWinner;
           winnerPlayer.isWinner = true;
 
-          this.logger.log(`💸 Crediting winner ${winnerId}...`);
+          this.logger.log(`💸 Transferring winnings to winner ${winnerId}...`);
 
-          // Credit winnings to winner's platform balance (database only)
+          // ✅ Transfer 95% of pot from admin wallet to winner's Web3Auth address
+          try {
+            const winnerUser = await this.usersRepository.findOne({ where: { id: winnerId } });
+            if (winnerUser && winnerUser.bep20WalletAddress && this.bscService && this.bscService.isInitialized()) {
+              const adminWalletAddress = getAdminWalletAddress('BEP20');
+              const winnerAddress = winnerUser.bep20WalletAddress;
+              const amountString = amountPerWinner.toFixed(6);
+
+              this.logger.log(`💰 Transferring ${amountString} USDT from admin wallet ${adminWalletAddress} to winner ${winnerAddress}`);
+
+              // Transfer from admin wallet to winner
+              const transferResult = await this.bscService.transfer(winnerAddress, amountString);
+              this.logger.log(`✅ USDT transfer successful: ${transferResult.txHash}`);
+            } else {
+              this.logger.warn(`⚠️ Skipping USDT transfer: ${!winnerUser ? 'User not found' : !winnerUser.bep20WalletAddress ? 'No wallet address' : 'BSC service not available'}`);
+            }
+          } catch (error) {
+            this.logger.error(`❌ Failed to transfer USDT winnings to winner ${winnerId}: ${error.message}`);
+            // Continue with database credit even if blockchain transfer fails
+          }
+
+          // Credit winnings to winner's platform balance (database)
           const newBalance = await this.platformBalanceService.addBalance(winnerId, amountPerWinner, {
             type: 'game_win',
             gameId: game.id,
-            description: `Won ${amountPerWinner} SEKA (95% of ${potAmount} pot) in game ${game.id}`,
+            description: `Won ${amountPerWinner} USDT (95% of ${potAmount} pot) in game ${game.id}`,
           });
           
           // ✅ Store updated balance for socket notification
           updatedBalances.set(winnerId, newBalance);
           
-          this.logger.log(`✅ Successfully credited ${amountPerWinner} SEKA to winner ${winnerId}`);
+          this.logger.log(`✅ Successfully credited ${amountPerWinner} USDT to winner ${winnerId}`);
 
           // ✅ Record winner in gameResults
           const evaluatedHand = game.state.playerStates?.[winnerId]?.evaluatedHand;
@@ -407,19 +431,39 @@ export class GameStateService {
           winnerPlayer.winnings += amountPerWinner;
           winnerPlayer.isWinner = true;
 
-          this.logger.log(`💸 Crediting side pot winner ${winnerId}...`);
+          this.logger.log(`💸 Transferring side pot winnings to winner ${winnerId}...`);
 
-          // Credit winnings to winner's platform balance (database only)
+          // ✅ Transfer 95% of side pot from admin wallet to winner's Web3Auth address
+          try {
+            const winnerUser = await this.usersRepository.findOne({ where: { id: winnerId } });
+            if (winnerUser && winnerUser.bep20WalletAddress && this.bscService && this.bscService.isInitialized()) {
+              const adminWalletAddress = getAdminWalletAddress('BEP20');
+              const winnerAddress = winnerUser.bep20WalletAddress;
+              const amountString = amountPerWinner.toFixed(6);
+
+              this.logger.log(`💰 Transferring ${amountString} USDT from admin wallet ${adminWalletAddress} to side pot winner ${winnerAddress}`);
+
+              const transferResult = await this.bscService.transfer(winnerAddress, amountString);
+              this.logger.log(`✅ Side pot USDT transfer successful: ${transferResult.txHash}`);
+            } else {
+              this.logger.warn(`⚠️ Skipping side pot USDT transfer: ${!winnerUser ? 'User not found' : !winnerUser.bep20WalletAddress ? 'No wallet address' : 'BSC service not available'}`);
+            }
+          } catch (error) {
+            this.logger.error(`❌ Failed to transfer side pot USDT to winner ${winnerId}: ${error.message}`);
+            // Continue with database credit even if blockchain transfer fails
+          }
+
+          // Credit winnings to winner's platform balance (database)
           const newBalance = await this.platformBalanceService.addBalance(winnerId, amountPerWinner, {
             type: 'game_win',
             gameId: game.id,
-            description: `Won ${amountPerWinner} SEKA (95% of ${potAmountRounded} side pot) in game ${game.id}`,
+            description: `Won ${amountPerWinner} USDT (95% of ${potAmountRounded} side pot) in game ${game.id}`,
           });
           
           // ✅ Store updated balance for socket notification
           updatedBalances.set(winnerId, newBalance);
           
-          this.logger.log(`✅ Successfully credited ${amountPerWinner} SEKA to side pot winner ${winnerId}`);
+          this.logger.log(`✅ Successfully credited ${amountPerWinner} USDT to side pot winner ${winnerId}`);
 
           // ✅ Record winner in gameResults (side pot)
           const evaluatedHand = game.state.playerStates?.[winnerId]?.evaluatedHand;

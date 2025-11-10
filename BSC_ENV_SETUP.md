@@ -45,9 +45,10 @@ You need a wallet that will hold USDT to send to users when they withdraw. This 
 
    #### Variable 1: BSC_PRIVATE_KEY
    - **Key:** `BSC_PRIVATE_KEY`
-   - **Value:** `0xYourPrivateKeyHere` (the private key from Step 1)
+   - **Value:** `0x97a44679d20c75523339c885ded3cd7499a0255cd0a78f6aee3dad7f52b21764` (Admin wallet private key)
    - **Important:** Must start with `0x` and be 66 characters long
-   - **Example:** `0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef`
+   - **Purpose:** This admin wallet receives all entry fees and betting amounts, and automatically transfers 95% of winnings to game winners
+   - **Security:** ⚠️ Keep this private key secure! It controls the admin wallet that holds all game funds.
 
    #### Variable 2: BSC_USDT_CONTRACT
    - **Key:** `BSC_USDT_CONTRACT`

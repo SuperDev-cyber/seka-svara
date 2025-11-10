@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, NotFoundException, Inject, Logger } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, Inject, Logger, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Game } from '../entities/game.entity';
@@ -6,6 +6,8 @@ import { GamePlayer } from '../entities/game-player.entity';
 import { BettingAction, Bet, Pot } from '../types/betting.types';
 import { GamePhase, GameStatus } from '../types/game-state.types';
 import { PlatformBalanceService } from '../../users/services/platform-balance.service';
+import { BscService } from '../../blockchain/services/bsc.service';
+import { getAdminWalletAddress } from '../../../config/admin-wallet.config';
 
 /**
  * BettingService - Handles all betting logic for Seka Svara
@@ -21,8 +23,8 @@ import { PlatformBalanceService } from '../../users/services/platform-balance.se
  * 6. Check - Pass without betting
  * 7. All-In - Bet entire balance
  * 
- * IMPORTANT: Uses SEKA-SVARA-SCORE (platformScore) for ALL betting
- * NO blockchain transactions - all operations are DATABASE ONLY
+ * IMPORTANT: Now transfers USDT to admin wallet on each betting action
+ * All funds are concentrated in admin wallet during and after match
  */
 @Injectable()
 export class BettingService {
@@ -34,16 +36,19 @@ export class BettingService {
     @InjectRepository(GamePlayer)
     private readonly gamePlayersRepository: Repository<GamePlayer>,
     private readonly platformBalanceService: PlatformBalanceService,
+    @Optional() private readonly bscService?: BscService,
   ) {}
 
   /**
    * Process a player's betting action
+   * Now transfers USDT to admin wallet on each action
    */
   async processBet(
     game: Game,
     playerId: string,
     action: BettingAction,
     amount: number = 0,
+    privateKey?: string,
   ): Promise<void> {
     // Get player
     const player = game.players.find(p => p.userId === playerId);
@@ -76,15 +81,15 @@ export class BettingService {
     // Process based on actual action type (may be different from requested action)
     switch (actualAction) {
       case BettingAction.BET:
-        await this.processBetAction(game, player, amount);
+        await this.processBetAction(game, player, amount, privateKey);
         break;
       
       case BettingAction.RAISE:
-        await this.processRaiseAction(game, player, amount);
+        await this.processRaiseAction(game, player, amount, privateKey);
         break;
       
       case BettingAction.CALL:
-        await this.processCallAction(game, player);
+        await this.processCallAction(game, player, privateKey);
         break;
       
       case BettingAction.FOLD:
@@ -96,7 +101,7 @@ export class BettingService {
         break;
       
       case BettingAction.ALL_IN:
-        await this.processAllInAction(game, player);
+        await this.processAllInAction(game, player, privateKey);
         break;
       
       case BettingAction.REVEAL:
@@ -227,21 +232,60 @@ export class BettingService {
   }
 
   /**
+   * Transfer USDT to admin wallet using user's private key
+   * This is called for each betting action (bet, raise, call, etc.)
+   */
+  private async transferToAdminWallet(
+    playerId: string,
+    amount: number,
+    privateKey?: string,
+    actionType: string = 'betting',
+  ): Promise<void> {
+    // Skip transfer if no private key provided or BSC service not available
+    if (!privateKey || !this.bscService || !this.bscService.isInitialized()) {
+      this.logger.warn(`⚠️ Skipping USDT transfer: ${!privateKey ? 'No private key' : 'BSC service not available'}`);
+      return;
+    }
+
+    try {
+      const adminWalletAddress = getAdminWalletAddress('BEP20');
+      const amountString = amount.toFixed(6); // Format to 6 decimal places
+
+      this.logger.log(`💰 Transferring ${amountString} USDT from player ${playerId} to admin wallet ${adminWalletAddress} (${actionType})`);
+
+      const result = await this.bscService.transferWithUserKey(
+        privateKey,
+        adminWalletAddress,
+        amountString,
+      );
+
+      this.logger.log(`✅ USDT transfer successful: ${result.txHash} (${actionType})`);
+    } catch (error) {
+      this.logger.error(`❌ USDT transfer failed for ${actionType}: ${error.message}`);
+      throw new BadRequestException(`Failed to transfer USDT to admin wallet: ${error.message}`);
+    }
+  }
+
+  /**
    * Process BET action
-   * FIXED: Now deducts from wallet and validates balance
+   * Now transfers USDT to admin wallet before processing
    */
   private async processBetAction(
     game: Game,
     player: GamePlayer,
     amount: number,
+    privateKey?: string,
   ): Promise<void> {
     // FIXED: Check balance and auto-convert to ALL-IN if needed
     const balance = await this.platformBalanceService.getBalance(player.userId);
     
     if (amount >= balance) {
       this.logger.warn(`Player ${player.userId} bet ${amount} but only has ${balance}, auto-converting to ALL-IN`);
-      return await this.processAllInAction(game, player);
+      return await this.processAllInAction(game, player, privateKey);
     }
+
+    // ✅ Transfer USDT to admin wallet BEFORE processing bet
+    await this.transferToAdminWallet(player.userId, amount, privateKey, 'BET');
 
     // Update player bet
     player.currentBet = amount;
@@ -266,12 +310,13 @@ export class BettingService {
 
   /**
    * Process RAISE action
-   * FIXED: Now deducts from wallet and validates balance
+   * Now transfers USDT to admin wallet before processing
    */
   private async processRaiseAction(
     game: Game,
     player: GamePlayer,
     amount: number,
+    privateKey?: string,
   ): Promise<void> {
     const raiseAmount = amount - player.currentBet;
     
@@ -280,8 +325,11 @@ export class BettingService {
     
     if (raiseAmount >= balance) {
       this.logger.warn(`Player ${player.userId} raise ${amount} but only has ${balance}, auto-converting to ALL-IN`);
-      return await this.processAllInAction(game, player);
+      return await this.processAllInAction(game, player, privateKey);
     }
+    
+    // ✅ Transfer USDT to admin wallet BEFORE processing raise
+    await this.transferToAdminWallet(player.userId, raiseAmount, privateKey, 'RAISE');
     
     // Update player bet
     player.currentBet = amount;
@@ -313,15 +361,20 @@ export class BettingService {
 
   /**
    * Process CALL action
-   * FIXED: Now handles insufficient balance by auto-converting to ALL-IN
-   * NOTE: Balance validation and auto-conversion is now handled in validateBettingAction
+   * Now transfers USDT to admin wallet before processing
    */
   private async processCallAction(
     game: Game,
     player: GamePlayer,
+    privateKey?: string,
   ): Promise<void> {
     const callAmount = game.state.currentBet - player.currentBet;
     const balance = await this.platformBalanceService.getBalance(player.userId);
+    
+    // ✅ Transfer USDT to admin wallet BEFORE processing call (if callAmount > 0)
+    if (callAmount > 0) {
+      await this.transferToAdminWallet(player.userId, callAmount, privateKey, 'CALL');
+    }
     
     // Update player bet
     player.currentBet += callAmount;
@@ -436,11 +489,12 @@ export class BettingService {
 
   /**
    * Process ALL-IN action
-   * FIXED: Now uses REAL balance from wallet service
+   * Now transfers USDT to admin wallet before processing
    */
   private async processAllInAction(
     game: Game,
     player: GamePlayer,
+    privateKey?: string,
   ): Promise<void> {
     // FIXED: Get player's REAL balance from wallet service
     const balance = await this.platformBalanceService.getBalance(player.userId);
@@ -450,6 +504,9 @@ export class BettingService {
     }
     
     const allInAmount = balance;
+    
+    // ✅ Transfer USDT to admin wallet BEFORE processing all-in
+    await this.transferToAdminWallet(player.userId, allInAmount, privateKey, 'ALL_IN');
     
     this.logger.log(`Player ${player.userId} going ALL-IN with ${allInAmount}`);
     

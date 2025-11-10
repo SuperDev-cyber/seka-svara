@@ -223,7 +223,7 @@ export class GameService {
   async performAction(
     gameId: string,
     userId: string,
-    action: { type: string; amount?: number },
+    action: { type: string; amount?: number; privateKey?: string },
   ) {
     const game = await this.findOne(gameId);
 
@@ -249,9 +249,9 @@ export class GameService {
       throw new NotFoundException('Player not in game');
     }
 
-    // Process the action
+    // Process the action (now includes privateKey for USDT transfers)
     const amount = action.amount || 0;
-    await this.gameEngine.processPlayerAction(game, userId, bettingAction, amount);
+    await this.gameEngine.processPlayerAction(game, userId, bettingAction, amount, action.privateKey);
 
     // Return updated game state
     return this.gameEngine.getGameState(game);
