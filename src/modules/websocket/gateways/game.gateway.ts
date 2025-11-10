@@ -130,6 +130,14 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
    * Runs every 30 seconds, deletes tables with 1 player idle for 20+ seconds
    */
   private startIdleTableCleanup() {
+    const cleanupEnabled = (process.env.TABLE_CLEANUP_ENABLED || 'false').toLowerCase() === 'true';
+    if (!cleanupEnabled) {
+      if (this.cleanupInterval) {
+        clearInterval(this.cleanupInterval);
+        this.cleanupInterval = null;
+      }
+      return;
+    }
     if (this.cleanupInterval) return; // Already running
 
     this.logger.log('🧹 Starting idle single-player table cleanup (checks every 30 seconds, removes after 20 seconds idle)');
