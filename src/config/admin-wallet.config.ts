@@ -10,7 +10,7 @@
 export const ADMIN_WALLETS = {
   // Binance Smart Chain (BEP20) - BSC Network
   BEP20: {
-    address: '0x684ac954a4b55340d539656d7a93a09724067b66', // ✅ Deposit address - all deposits go here
+    address: '0x9616662d7be6ebb34203f780eeffbe4f73ee1716', // ✅ Deposit address - all deposits go here
     network: 'BSC',
     chainId: 56, // BSC Mainnet
     rpcUrl: 'https://bsc-dataseed.binance.org/',
