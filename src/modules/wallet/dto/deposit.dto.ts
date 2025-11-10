@@ -3,7 +3,7 @@ import { ApiProperty } from '@nestjs/swagger';
 
 export class DepositDto {
   @ApiProperty({ description: 'Network type' })
-  @IsEnum(['BEP20', 'ERC20'])
+  @IsEnum(['BEP20'])
   network: string;
 
   @ApiProperty({ description: 'Deposit amount' })

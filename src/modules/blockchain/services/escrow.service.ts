@@ -1,7 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { BscService } from './bsc.service';
-import { EthereumService } from './ethereum.service';
 
 /**
  * Service for managing escrow smart contracts
@@ -14,10 +13,9 @@ export class EscrowService {
   constructor(
     private configService: ConfigService,
     private bscService: BscService,
-    private ethereumService: EthereumService,
   ) {}
 
-  async createEscrow(network: 'BEP20' | 'ERC20', gameId: string, amount: string) {
+  async createEscrow(network: 'BEP20', gameId: string, amount: string) {
     // TODO: Create escrow contract for game
     // Lock funds until game ends
     this.logger.log(`Creating escrow for game ${gameId} on ${network}`);
@@ -25,7 +23,7 @@ export class EscrowService {
   }
 
   async releaseEscrow(
-    network: 'BEP20' | 'ERC20',
+    network: 'BEP20',
     gameId: string,
     winnerId: string,
     amount: string,
@@ -37,22 +35,20 @@ export class EscrowService {
     throw new Error('Method not implemented');
   }
 
-  async refundEscrow(network: 'BEP20' | 'ERC20', gameId: string, players: any[]) {
+  async refundEscrow(network: 'BEP20', gameId: string, players: any[]) {
     // TODO: Refund escrow if game is cancelled
     this.logger.log(`Refunding escrow for cancelled game ${gameId}`);
     throw new Error('Method not implemented');
   }
 
-  async getEscrowBalance(network: 'BEP20' | 'ERC20', gameId: string) {
+  async getEscrowBalance(network: 'BEP20', gameId: string) {
     // TODO: Get current balance in escrow
     throw new Error('Method not implemented');
   }
 
-  async verifyEscrowTransaction(network: 'BEP20' | 'ERC20', txHash: string) {
+  async verifyEscrowTransaction(network: 'BEP20', txHash: string) {
     if (network === 'BEP20') {
       return this.bscService.verifyTransaction(txHash);
-    } else if (network === 'ERC20') {
-      return this.ethereumService.verifyTransaction(txHash);
     }
     throw new Error(`Unsupported network: ${network}`);
   }

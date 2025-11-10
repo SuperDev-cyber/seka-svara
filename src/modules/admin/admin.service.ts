@@ -192,7 +192,7 @@ export class AdminService {
       }
 
       // Get wallet address (prefer BEP20, fallback to ERC20)
-      const walletAddress = user.bep20WalletAddress || user.erc20WalletAddress || 'N/A';
+      const walletAddress = user.bep20WalletAddress || 'N/A';
       
       // Format wallet address to show first 6 and last 6 characters
       const formattedWallet = walletAddress !== 'N/A' && walletAddress.length > 12

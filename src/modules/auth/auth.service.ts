@@ -439,11 +439,10 @@ export class AuthService {
     try {
       console.log('Web3Auth login requested:', { walletAddress, email, name });
       
-      // Check if user already exists by wallet address (bep20WalletAddress or erc20WalletAddress)
+      // Check if user already exists by wallet address (bep20WalletAddress)
       let user = await this.usersRepository.findOne({
         where: [
           { bep20WalletAddress: walletAddress },
-          { erc20WalletAddress: walletAddress },
         ],
       });
 
@@ -488,7 +487,6 @@ export class AuthService {
           platformScore: 0,
           points: 0,
           bep20WalletAddress: walletAddress, // Store wallet address
-          erc20WalletAddress: walletAddress, // Same address for ERC20
         });
         
         console.log('💾 Saving new Web3Auth user to database...');
@@ -503,9 +501,6 @@ export class AuthService {
         // Update wallet address if not set
         if (!user.bep20WalletAddress) {
           user.bep20WalletAddress = walletAddress;
-        }
-        if (!user.erc20WalletAddress) {
-          user.erc20WalletAddress = walletAddress;
         }
         
         // Update email if provided and not set

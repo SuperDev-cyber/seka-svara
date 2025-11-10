@@ -68,9 +68,6 @@ export class User {
   @Column({ nullable: true })
   bep20WalletAddress: string;
 
-  @Column({ nullable: true })
-  erc20WalletAddress: string;
-
   @Column({ type: 'decimal', precision: 18, scale: 8, default: 0 })
   points: number;
 

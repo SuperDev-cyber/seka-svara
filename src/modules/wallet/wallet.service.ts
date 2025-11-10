@@ -7,7 +7,6 @@ import { User } from '../users/entities/user.entity';
 import { AddressGeneratorService } from './services/address-generator.service';
 import { BlockchainService } from '../blockchain/blockchain.service';
 import { BscService } from '../blockchain/services/bsc.service';
-import { EthereumService } from '../blockchain/services/ethereum.service';
 import { DepositDto } from './dto/deposit.dto';
 import { WithdrawDto } from './dto/withdraw.dto';
 // Removed getAdminWalletAddress import - withdrawals now always use user's Web3Auth account address
@@ -32,8 +31,6 @@ export class WalletService {
     private blockchainService?: BlockchainService,
     @Optional() @Inject(BscService)
     private bscService?: BscService,
-    @Optional() @Inject(EthereumService)
-    private ethereumService?: EthereumService,
   ) {}
 
   async getUserWallet(userId: string) {
@@ -128,12 +125,10 @@ export class WalletService {
     };
   }
 
-  async generateDepositAddress(userId: string, network: 'BEP20' | 'ERC20') {
+  async generateDepositAddress(userId: string, network: 'BEP20') {
     const wallet = await this.getUserWallet(userId);
     
-    // ERC20 and BEP20 use the same address format (Ethereum-compatible)
-    // They can share the same address since Web3Auth account works on both networks
-    if (network === 'BEP20' || network === 'ERC20') {
+    if (network === 'BEP20') {
       if (!wallet.bep20Address) {
         wallet.bep20Address = this.addressGeneratorService.generateBEP20Address(userId);
         await this.walletsRepository.save(wallet);
@@ -141,7 +136,7 @@ export class WalletService {
       return wallet.bep20Address;
     }
     
-    throw new BadRequestException(`Invalid network type: ${network}. Only BEP20 and ERC20 are supported.`);
+    throw new BadRequestException(`Invalid network type: ${network}. Only BEP20 is supported.`);
   }
 
   /**
@@ -163,9 +158,7 @@ export class WalletService {
     
     // ✅ Get user's unique deposit address for this network
     let userDepositAddress: string;
-    // ERC20 and BEP20 use the same address format (Ethereum-compatible)
-    // They can share the same address since Web3Auth account works on both networks
-    if (depositDto.network === 'BEP20' || depositDto.network === 'ERC20') {
+    if (depositDto.network === 'BEP20') {
       if (!wallet.bep20Address) {
         // Generate address if it doesn't exist
         wallet.bep20Address = this.addressGeneratorService.generateBEP20Address(userId);
@@ -173,7 +166,7 @@ export class WalletService {
       }
       userDepositAddress = wallet.bep20Address;
     } else {
-      throw new BadRequestException(`Invalid network type: ${depositDto.network}. Only BEP20 and ERC20 are supported.`);
+      throw new BadRequestException(`Invalid network type: ${depositDto.network}. Only BEP20 is supported.`);
     }
     
     this.logger.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
@@ -282,15 +275,8 @@ export class WalletService {
         const balanceStr = await this.bscService.getBalance(fromAddress);
         actualBalance = parseFloat(balanceStr);
         this.logger.log(`💰 BEP20 Balance Check: ${fromAddress} has ${actualBalance} USDT on-chain`);
-      } else if (withdrawDto.network === 'ERC20') {
-        if (!this.ethereumService || !this.ethereumService.isInitialized()) {
-          throw new BadRequestException('Ethereum service not available. Please contact support.');
-        }
-        const balanceStr = await this.ethereumService.getBalance(fromAddress);
-        actualBalance = parseFloat(balanceStr);
-        this.logger.log(`💰 ERC20 Balance Check: ${fromAddress} has ${actualBalance} USDT on-chain`);
       } else {
-        throw new BadRequestException(`Unsupported network: ${withdrawDto.network}. Only BEP20 and ERC20 are supported.`);
+        throw new BadRequestException(`Unsupported network: ${withdrawDto.network}. Only BEP20 is supported.`);
       }
     } catch (balanceError) {
       this.logger.error(`❌ Failed to fetch blockchain balance: ${balanceError.message}`);
@@ -366,33 +352,8 @@ export class WalletService {
           }
           throw new BadRequestException(errorMessage);
         }
-      } else if (withdrawDto.network === 'ERC20') {
-        if (!this.ethereumService) {
-          throw new BadRequestException('Ethereum service not available. Please contact support.');
-        }
-        // ✅ Use user's private key to transfer from their Web3Auth account
-        this.logger.log(`📤 Sending ${withdrawDto.amount} USDT via Ethereum from user's Web3Auth account (${fromAddress}) to ${withdrawDto.toAddress}`);
-        try {
-          const result = await this.ethereumService.transferWithUserKey(
-            withdrawDto.privateKey, // ✅ User's private key
-            withdrawDto.toAddress,
-            withdrawDto.amount.toString()
-          );
-          txHash = result.txHash;
-          this.logger.log(`✅ Ethereum transfer with user key successful: ${txHash}`);
-        } catch (blockchainError) {
-          this.logger.error(`❌ Ethereum transfer error: ${blockchainError.message}`);
-          // Provide more specific error messages for common issues
-          let errorMessage = blockchainError.message;
-          if (errorMessage.includes('Insufficient ETH')) {
-            errorMessage = errorMessage; // Keep the detailed message from EthereumService
-          } else if (errorMessage.includes('Insufficient USDT')) {
-            errorMessage = errorMessage; // Keep the detailed message from EthereumService
-          }
-          throw new BadRequestException(errorMessage);
-        }
       } else {
-        throw new BadRequestException(`Unsupported network: ${withdrawDto.network}. Only BEP20 and ERC20 are supported.`);
+        throw new BadRequestException(`Unsupported network: ${withdrawDto.network}. Only BEP20 is supported.`);
       }
       
       // Update transaction with hash

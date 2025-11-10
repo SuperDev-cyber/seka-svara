@@ -16,6 +16,7 @@ import { GameEngine } from '../../game/services/game-engine.service';
 import { GameStateService } from '../../game/services/game-state.service';
 import { WalletService } from '../../wallet/wallet.service';
 import { EmailService } from '../../email/email.service';
+import { BscService } from '../../blockchain/services/bsc.service';
 import { GameStatus } from '../../game/types/game-state.types';
 import { User } from '../../users/entities/user.entity';
 import { GameTable } from '../../tables/entities/game-table.entity';
@@ -110,6 +111,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private readonly gameStateService: GameStateService,
     private readonly walletService: WalletService,
     private readonly emailService: EmailService,
+    private readonly bscService: BscService,
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
     @InjectRepository(GameTable)
@@ -1340,9 +1342,27 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.logger.log(`📋 Preserving empty tables in database for restart recovery`);
 
     // 2) Return tables from DB only (currentPlayers > 0)
-    const dbTables = await this.gameTablesRepository
+    // ✅ Filter: Only show BSC/BEP20 tables and filter private tables
+    const queryBuilder = this.gameTablesRepository
       .createQueryBuilder('t')
       .where('t.currentPlayers > 0')
+      .andWhere('(t.network = :network OR t.network = :network2)', { 
+        network: 'BEP20', 
+        network2: 'BSC' 
+      });
+
+    // ✅ Filter out private tables unless user is the creator
+    if (data?.userId) {
+      queryBuilder.andWhere(
+        '(t.isPrivate = false OR (t.isPrivate = true AND t.creatorId = :userId))',
+        { userId: data.userId }
+      );
+    } else {
+      // If no userId provided, only show public tables
+      queryBuilder.andWhere('t.isPrivate = false');
+    }
+
+    const dbTables = await queryBuilder
       .orderBy('t.createdAt', 'DESC')
       .getMany();
 
@@ -1360,7 +1380,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       createdAt: t.createdAt,
     }));
 
-    this.logger.log(`   Returning ${payload.length} DB tables`);
+    this.logger.log(`   Returning ${payload.length} DB tables (BSC only, private filtered)`);
     client.emit('active_tables', payload);
     return { success: true, tables: payload };
   }
@@ -2510,18 +2530,30 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.logger.log(`🔒 Lock acquired for ${data.userEmail} joining table ${data.tableId}`);
     
     try {
-    // ✅ FIX: Fetch user's platformScore from database to set initial balance
+    // ✅ FIX: Fetch user's USDT balance from blockchain (Web3Auth wallet address)
     let userBalance = 0;
+    let userWalletAddress = '';
     try {
       const userRecord = await this.usersRepository.findOne({ where: { id: data.userId } });
-      if (userRecord && userRecord.platformScore !== null && userRecord.platformScore !== undefined) {
-        userBalance = Math.round(Number(userRecord.platformScore));
-        this.logger.log(`💰 Fetched platformScore for ${data.userEmail}: ${userBalance} SEKA`);
+      if (userRecord) {
+        // Get user's Web3Auth wallet address (BEP20)
+        userWalletAddress = userRecord.bep20WalletAddress;
+        
+        if (userWalletAddress && this.bscService && this.bscService.isInitialized()) {
+          // Fetch actual USDT balance from blockchain
+          const balanceStr = await this.bscService.getBalance(userWalletAddress);
+          userBalance = parseFloat(balanceStr);
+          this.logger.log(`💰 Fetched USDT balance for ${data.userEmail} (${userWalletAddress}): ${userBalance} USDT`);
+        } else {
+          this.logger.warn(`⚠️ No wallet address or BSC service not available for ${data.userEmail}, defaulting to 0`);
+          userBalance = 0;
+        }
       } else {
-        this.logger.warn(`⚠️ No platformScore found for ${data.userEmail}, defaulting to 0`);
+        this.logger.warn(`⚠️ User record not found for ${data.userEmail}, defaulting to 0`);
       }
     } catch (error) {
-      this.logger.error(`❌ Error fetching user platformScore: ${error.message}`);
+      this.logger.error(`❌ Error fetching user USDT balance: ${error.message}`);
+      userBalance = 0;
     }
     
       // ✅ FIX RACE CONDITION: Double-check player doesn't exist right before adding (atomic check with lock)
@@ -2535,14 +2567,14 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         };
       }
       
-      // ✅ NEW: Check if user has sufficient balance (2x entry fee required)
+      // ✅ NEW: Check if user has sufficient USDT balance (2x entry fee required)
       const requiredBalance = currentTable.entryFee * 2;
       if (userBalance < requiredBalance) {
-        this.logger.warn(`❌ User ${data.userEmail} has insufficient balance: ${userBalance} < ${requiredBalance} (2x entry fee)`);
+        this.logger.warn(`❌ User ${data.userEmail} has insufficient USDT balance: ${userBalance} < ${requiredBalance} (2x entry fee)`);
         joiningSet.delete(data.userId);
         return {
           success: false,
-          message: `Insufficient balance. You need at least ${requiredBalance} SEKA (2x entry fee of ${currentTable.entryFee}) to join this table. Your current balance: ${userBalance} SEKA`,
+          message: `Insufficient USDT balance. You need at least ${requiredBalance} USDT (2x entry fee of ${currentTable.entryFee}) to join this table. Your current balance: ${userBalance.toFixed(2)} USDT`,
           balance: userBalance,
           requiredBalance: requiredBalance,
           entryFee: currentTable.entryFee,

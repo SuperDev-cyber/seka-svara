@@ -34,7 +34,7 @@ export class WalletController {
 
   @Post('generate-address')
   @ApiOperation({ summary: 'Generate deposit address' })
-  async generateAddress(@Request() req, @Body() body: { network: 'BEP20' | 'ERC20' }) {
+  async generateAddress(@Request() req, @Body() body: { network: 'BEP20' }) {
     const address = await this.walletService.generateDepositAddress(req.user.id, body.network);
     // Return as JSON object for proper parsing
     return { address, network: body.network };
@@ -92,7 +92,7 @@ export class WalletController {
   @Public()
   @Get('admin-addresses')
   @ApiOperation({ summary: 'Get admin wallet addresses for deposits' })
-  async getAdminAddresses(@Query('network') network?: 'BEP20' | 'ERC20') {
+  async getAdminAddresses(@Query('network') network?: 'BEP20') {
     if (network) {
       return {
         network,
@@ -108,12 +108,6 @@ export class WalletController {
         network: ADMIN_WALLETS.BEP20.network,
         chainId: ADMIN_WALLETS.BEP20.chainId,
         USDTContractAddress: ADMIN_WALLETS.BEP20.USDTContractAddress,
-      },
-      ERC20: {
-        address: ADMIN_WALLETS.ERC20.address,
-        network: ADMIN_WALLETS.ERC20.network,
-        chainId: ADMIN_WALLETS.ERC20.chainId,
-        USDTContractAddress: ADMIN_WALLETS.ERC20.USDTContractAddress,
       },
     };
   }
